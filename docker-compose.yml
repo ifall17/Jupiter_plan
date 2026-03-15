@@ -1,0 +1,110 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: jupiter_postgres
+    env_file:
+      - .env
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    user: postgres
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    ports:
+      - "127.0.0.1:5432:5432"
+    restart: unless-stopped
+    networks:
+      - jupiter_network
+
+  redis:
+    image: redis:7-alpine
+    container_name: jupiter_redis
+    env_file:
+      - .env
+    command: redis-server --requirepass ${REDIS_PASSWORD}
+    user: redis
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a $$REDIS_PASSWORD ping | grep PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    ports:
+      - "6380:6379"
+    restart: unless-stopped
+    networks:
+      - jupiter_network
+
+  api:
+    build:
+      context: ./apps/api
+      dockerfile: Dockerfile
+      target: builder
+    container_name: jupiter_api
+    env_file:
+      - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "3001:3001"
+    command: npm run start:dev
+    volumes:
+      - ./apps/api/src:/app/src
+    restart: unless-stopped
+    networks:
+      - jupiter_network
+
+  calc:
+    build:
+      context: ./apps/calc
+      dockerfile: Dockerfile
+      target: production
+    container_name: jupiter_calc
+    env_file:
+      - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    expose:
+      - "8000"
+    restart: unless-stopped
+    networks:
+      - jupiter_network
+
+  web:
+    build:
+      context: ./apps/web
+      dockerfile: Dockerfile
+      target: production
+    container_name: jupiter_web
+    env_file:
+      - .env
+    depends_on:
+      - api
+    ports:
+      - "5173:5173"
+    restart: unless-stopped
+    networks:
+      - jupiter_network
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  jupiter_network:
+    driver: bridge

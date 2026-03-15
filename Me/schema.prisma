@@ -1,0 +1,573 @@
+// ═══════════════════════════════════════════════════════════════
+// Jupiter_Plan — schema.prisma
+// PostgreSQL 16 · Multi-tenant · SYSCOHADA · FCFA natif
+// Généré depuis ERD v1.0
+// ═══════════════════════════════════════════════════════════════
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─────────────────────────────────────────
+// ENUMS
+// ─────────────────────────────────────────
+
+enum PlanTier {
+  STARTER
+  PRO
+  ENTERPRISE
+}
+
+enum UserRole {
+  ADMIN
+  CEO
+  DAF
+  CONTROLLER
+  ACCOUNTANT
+}
+
+enum FiscalStatus {
+  OPEN
+  CLOSED
+  LOCKED
+}
+
+enum BudgetStatus {
+  DRAFT
+  SUBMITTED
+  APPROVED
+  LOCKED
+}
+
+enum LineType {
+  REVENUE
+  EXPENSE
+  CAPEX
+  FINANCING
+}
+
+enum ImportSource {
+  EXCEL
+  SAGE
+  MANUAL
+}
+
+enum ImportStatus {
+  PENDING
+  PROCESSING
+  DONE
+  FAILED
+}
+
+enum AccountType {
+  BANK
+  WAVE
+  ORANGE_MONEY
+  MTN_MOMO
+}
+
+enum ScenarioType {
+  OPTIMISTE
+  BASE
+  PESSIMISTE
+  CUSTOM
+}
+
+enum ScenarioStatus {
+  DRAFT
+  CALCULATED
+  SAVED
+}
+
+enum HypothesisTarget {
+  REVENUE
+  COGS
+  EMPLOYEE_COST
+  CONTRACTOR_COST
+  SGA
+  CAPEX
+  FINANCING
+}
+
+enum AlertType {
+  KPI_THRESHOLD
+  BUDGET_VARIANCE
+  RUNWAY_WARNING
+  IMPORT_ERROR
+}
+
+enum AlertSeverity {
+  INFO
+  WARN
+  CRITICAL
+}
+
+enum RunwaySeverity {
+  SAFE
+  WARNING
+  CRITICAL
+}
+
+enum KpiCategory {
+  PROFITABILITY
+  LIQUIDITY
+  EFFICIENCY
+  GROWTH
+  CUSTOM
+}
+
+enum AuditAction {
+  LOGIN
+  LOGOUT
+  IMPORT
+  EXPORT
+  BUDGET_CREATE
+  BUDGET_APPROVE
+  SCENARIO_SAVE
+  PERIOD_CLOSE
+  USER_INVITE
+}
+
+// ─────────────────────────────────────────
+// COUCHE 1 — ORGANISATION
+// ─────────────────────────────────────────
+
+model Organization {
+  id             String    @id @default(cuid())
+  slug           String    @unique @db.VarChar(50)
+  name           String    @db.VarChar(200)
+  currency       String    @default("XOF") @db.VarChar(3)
+  country_code   String    @default("SN") @db.VarChar(2)
+  syscohada_plan Boolean   @default(true)
+  plan_tier      PlanTier  @default(STARTER)
+  is_active      Boolean   @default(true)
+  created_at     DateTime  @default(now()) @db.Timestamptz
+  updated_at     DateTime  @updatedAt @db.Timestamptz
+
+  // Relations
+  users               User[]
+  fiscal_years        FiscalYear[]
+  periods             Period[]
+  budgets             Budget[]
+  budget_lines        BudgetLine[]
+  transactions        Transaction[]
+  import_jobs         ImportJob[]
+  bank_accounts       BankAccount[]
+  cash_flow_plans     CashFlowPlan[]
+  scenarios           Scenario[]
+  kpis                Kpi[]
+  kpi_values          KpiValue[]
+  alerts              Alert[]
+  audit_logs          AuditLog[]
+  financial_snapshots FinancialSnapshot[]
+
+  @@map("organizations")
+}
+
+// ─────────────────────────────────────────
+// COUCHE 2 — AUTH & SÉCURITÉ
+// ─────────────────────────────────────────
+
+model User {
+  id              String    @id @default(cuid())
+  org_id          String
+  email           String    @unique @db.VarChar(255)
+  password_hash   String    @db.VarChar(255)
+  first_name      String    @db.VarChar(100)
+  last_name       String    @db.VarChar(100)
+  role            UserRole  @default(ACCOUNTANT)
+  is_active       Boolean   @default(true)
+  failed_attempts Int       @default(0) @db.SmallInt
+  last_login_at   DateTime? @db.Timestamptz
+  created_at      DateTime  @default(now()) @db.Timestamptz
+  updated_at      DateTime  @updatedAt @db.Timestamptz
+
+  // Relations
+  organization     Organization  @relation(fields: [org_id], references: [id])
+  audit_logs       AuditLog[]
+  budgets_created  Budget[]      @relation("BudgetCreatedBy")
+  budgets_approved Budget[]      @relation("BudgetApprovedBy")
+  scenarios        Scenario[]
+
+  @@index([org_id, role])
+  @@map("users")
+}
+
+model AuditLog {
+  id          BigInt      @id @default(autoincrement())
+  org_id      String
+  user_id     String?
+  action      AuditAction
+  entity_type String?     @db.VarChar(50)
+  entity_id   String?     @db.VarChar(50)
+  ip_address  String?     @db.VarChar(45)
+  metadata    Json?       @db.JsonB
+  created_at  DateTime    @default(now()) @db.Timestamptz
+
+  // Relations
+  organization Organization @relation(fields: [org_id], references: [id])
+  user         User?        @relation(fields: [user_id], references: [id])
+
+  @@index([org_id, created_at(sort: Desc)])
+  @@map("audit_logs")
+}
+
+// ─────────────────────────────────────────
+// COUCHE 3 — FISCAL
+// ─────────────────────────────────────────
+
+model FiscalYear {
+  id         String       @id @default(cuid())
+  org_id     String
+  label      String       @db.VarChar(20)   // ex: FY2026
+  start_date DateTime     @db.Date
+  end_date   DateTime     @db.Date
+  status     FiscalStatus @default(OPEN)
+  is_current Boolean      @default(false)
+  closed_at  DateTime?    @db.Timestamptz
+  created_at DateTime     @default(now()) @db.Timestamptz
+  updated_at DateTime     @updatedAt @db.Timestamptz
+
+  // Relations
+  organization        Organization      @relation(fields: [org_id], references: [id])
+  periods             Period[]
+  budgets             Budget[]
+  scenarios           Scenario[]
+  cash_flow_plans     CashFlowPlan[]
+
+  @@index([org_id, is_current])
+  @@map("fiscal_years")
+}
+
+model Period {
+  id            String       @id @default(cuid())
+  org_id        String
+  fiscal_year_id String
+  period_number Int          @db.SmallInt   // 1–12
+  label         String       @db.VarChar(20) // ex: Jan 2026
+  start_date    DateTime     @db.Date
+  end_date      DateTime     @db.Date
+  status        FiscalStatus @default(OPEN)
+  is_current    Boolean      @default(false)
+
+  // Relations
+  organization        Organization      @relation(fields: [org_id], references: [id])
+  fiscal_year         FiscalYear        @relation(fields: [fiscal_year_id], references: [id])
+  budget_lines        BudgetLine[]
+  transactions        Transaction[]
+  kpi_values          KpiValue[]
+  alerts              Alert[]
+  financial_snapshots FinancialSnapshot[]
+
+  @@unique([fiscal_year_id, period_number])
+  @@index([org_id, is_current])
+  @@map("periods")
+}
+
+// ─────────────────────────────────────────
+// COUCHE 4 — BUDGET
+// ─────────────────────────────────────────
+
+model Budget {
+  id             String       @id @default(cuid())
+  org_id         String
+  fiscal_year_id String
+  created_by     String
+  approved_by    String?
+  name           String       @db.VarChar(200)
+  version        Int          @default(1) @db.SmallInt
+  status         BudgetStatus @default(DRAFT)
+  is_reforecast  Boolean      @default(false)
+  total_revenue  Decimal      @default(0) @db.Decimal(18, 2)
+  total_expenses Decimal      @default(0) @db.Decimal(18, 2)
+  approved_at    DateTime?    @db.Timestamptz
+  created_at     DateTime     @default(now()) @db.Timestamptz
+  updated_at     DateTime     @updatedAt @db.Timestamptz
+
+  // Relations
+  organization   Organization @relation(fields: [org_id], references: [id])
+  fiscal_year    FiscalYear   @relation(fields: [fiscal_year_id], references: [id])
+  creator        User         @relation("BudgetCreatedBy", fields: [created_by], references: [id])
+  approver       User?        @relation("BudgetApprovedBy", fields: [approved_by], references: [id])
+  budget_lines   BudgetLine[]
+  scenarios      Scenario[]   @relation("ScenarioBaseBudget")
+
+  @@index([org_id, fiscal_year_id, status])
+  @@map("budgets")
+}
+
+model BudgetLine {
+  id              String   @id @default(cuid())
+  org_id          String
+  budget_id       String
+  period_id       String
+  account_code    String   @db.VarChar(10)   // Code SYSCOHADA
+  account_label   String   @db.VarChar(200)
+  line_type       LineType
+  department      String?  @db.VarChar(100)
+  amount_budget   Decimal  @default(0) @db.Decimal(18, 2)
+  amount_actual   Decimal  @default(0) @db.Decimal(18, 2)
+  amount_forecast Decimal? @db.Decimal(18, 2)
+  variance        Decimal  @default(0) @db.Decimal(18, 2)  // calculé
+  variance_pct    Decimal  @default(0) @db.Decimal(8, 4)   // calculé
+  notes           String?  @db.Text
+  created_at      DateTime @default(now()) @db.Timestamptz
+  updated_at      DateTime @updatedAt @db.Timestamptz
+
+  // Relations
+  organization Organization @relation(fields: [org_id], references: [id])
+  budget       Budget       @relation(fields: [budget_id], references: [id])
+  period       Period       @relation(fields: [period_id], references: [id])
+
+  @@index([budget_id, period_id])
+  @@index([org_id, account_code])
+  @@map("budget_lines")
+}
+
+model Transaction {
+  id               String       @id @default(cuid())
+  org_id           String
+  period_id        String
+  import_job_id    String?
+  transaction_date DateTime     @db.Date
+  account_code     String       @db.VarChar(10)
+  label            String       @db.VarChar(500)
+  debit            Decimal      @default(0) @db.Decimal(18, 2)
+  credit           Decimal      @default(0) @db.Decimal(18, 2)
+  currency         String       @default("XOF") @db.VarChar(3)
+  source           ImportSource @default(MANUAL)
+  reference        String?      @db.VarChar(100)
+  is_validated     Boolean      @default(false)
+  created_at       DateTime     @default(now()) @db.Timestamptz
+
+  // Relations
+  organization Organization @relation(fields: [org_id], references: [id])
+  period       Period       @relation(fields: [period_id], references: [id])
+  import_job   ImportJob?   @relation(fields: [import_job_id], references: [id])
+
+  @@index([org_id, period_id])
+  @@index([org_id, transaction_date])
+  @@map("transactions")
+}
+
+model ImportJob {
+  id            String       @id @default(cuid())
+  org_id        String
+  created_by    String
+  period_id     String
+  source        ImportSource
+  status        ImportStatus @default(PENDING)
+  rows_total    Int?
+  rows_inserted Int          @default(0)
+  rows_skipped  Int          @default(0)
+  error_log     Json?        @db.JsonB
+  file_name     String?      @db.VarChar(255)
+  file_url      String?      @db.VarChar(500)
+  created_at    DateTime     @default(now()) @db.Timestamptz
+  updated_at    DateTime     @updatedAt @db.Timestamptz
+
+  // Relations
+  organization Organization  @relation(fields: [org_id], references: [id])
+  transactions Transaction[]
+
+  @@index([org_id, status])
+  @@map("import_jobs")
+}
+
+// ─────────────────────────────────────────
+// COUCHE 5 — TRÉSORERIE
+// ─────────────────────────────────────────
+
+model BankAccount {
+  id             String      @id @default(cuid())
+  org_id         String
+  name           String      @db.VarChar(200)
+  account_type   AccountType
+  account_number String?     @db.VarChar(50)
+  currency       String      @default("XOF") @db.VarChar(3)
+  current_balance Decimal    @default(0) @db.Decimal(18, 2)
+  is_active      Boolean     @default(true)
+  last_synced_at DateTime?   @db.Timestamptz
+  created_at     DateTime    @default(now()) @db.Timestamptz
+  updated_at     DateTime    @updatedAt @db.Timestamptz
+
+  // Relations
+  organization Organization @relation(fields: [org_id], references: [id])
+
+  @@index([org_id, is_active])
+  @@map("bank_accounts")
+}
+
+model CashFlowPlan {
+  id              String         @id @default(cuid())
+  org_id          String
+  fiscal_year_id  String
+  label           String         @db.VarChar(200)
+  start_date      DateTime       @db.Date
+  weeks_count     Int            @default(13) @db.SmallInt
+  total_inflow    Decimal        @default(0) @db.Decimal(18, 2)
+  total_outflow   Decimal        @default(0) @db.Decimal(18, 2)
+  runway_months   Decimal?       @db.Decimal(5, 1)  // calculé
+  runway_severity RunwaySeverity @default(SAFE)      // calculé
+  created_at      DateTime       @default(now()) @db.Timestamptz
+  updated_at      DateTime       @updatedAt @db.Timestamptz
+
+  // Relations
+  organization Organization @relation(fields: [org_id], references: [id])
+  fiscal_year  FiscalYear   @relation(fields: [fiscal_year_id], references: [id])
+
+  @@index([org_id, fiscal_year_id])
+  @@map("cash_flow_plans")
+}
+
+// ─────────────────────────────────────────
+// COUCHE 6 — SCÉNARIOS
+// ─────────────────────────────────────────
+
+model Scenario {
+  id             String         @id @default(cuid())
+  org_id         String
+  fiscal_year_id String
+  base_budget_id String?
+  created_by     String
+  name           String         @db.VarChar(200)
+  type           ScenarioType   @default(BASE)
+  status         ScenarioStatus @default(DRAFT)
+  description    String?        @db.Text
+  created_at     DateTime       @default(now()) @db.Timestamptz
+  updated_at     DateTime       @updatedAt @db.Timestamptz
+
+  // Relations
+  organization        Organization       @relation(fields: [org_id], references: [id])
+  fiscal_year         FiscalYear         @relation(fields: [fiscal_year_id], references: [id])
+  base_budget         Budget?            @relation("ScenarioBaseBudget", fields: [base_budget_id], references: [id])
+  creator             User               @relation(fields: [created_by], references: [id])
+  hypotheses          ScenarioHypothesis[]
+  financial_snapshots FinancialSnapshot[]
+  kpi_values          KpiValue[]
+
+  @@index([org_id, fiscal_year_id, status])
+  @@map("scenarios")
+}
+
+model ScenarioHypothesis {
+  id             String           @id @default(cuid())
+  org_id         String
+  scenario_id    String
+  target         HypothesisTarget
+  variable_name  String           @db.VarChar(100)  // ex: growth_rate
+  base_value     Decimal          @db.Decimal(18, 6)
+  scenario_value Decimal          @db.Decimal(18, 6)
+  delta_pct      Decimal          @default(0) @db.Decimal(8, 4)  // calculé
+  created_at     DateTime         @default(now()) @db.Timestamptz
+
+  // Relations
+  scenario Scenario @relation(fields: [scenario_id], references: [id], onDelete: Cascade)
+
+  @@index([scenario_id])
+  @@map("scenario_hypotheses")
+}
+
+model FinancialSnapshot {
+  id               String   @id @default(cuid())
+  org_id           String
+  period_id        String
+  scenario_id      String?  // null = données réelles
+  revenue          Decimal  @default(0) @db.Decimal(18, 2)
+  cogs             Decimal  @default(0) @db.Decimal(18, 2)
+  gross_profit     Decimal  @default(0) @db.Decimal(18, 2)
+  sga              Decimal  @default(0) @db.Decimal(18, 2)
+  ebitda           Decimal  @default(0) @db.Decimal(18, 2)
+  depreciation     Decimal  @default(0) @db.Decimal(18, 2)
+  ebit             Decimal  @default(0) @db.Decimal(18, 2)
+  interest_expense Decimal  @default(0) @db.Decimal(18, 2)
+  tax              Decimal  @default(0) @db.Decimal(18, 2)
+  net_income       Decimal  @default(0) @db.Decimal(18, 2)
+  cash_balance     Decimal  @default(0) @db.Decimal(18, 2)
+  total_assets     Decimal  @default(0) @db.Decimal(18, 2)
+  total_liabilities Decimal @default(0) @db.Decimal(18, 2)
+  total_equity     Decimal  @default(0) @db.Decimal(18, 2)
+  computed_at      DateTime @default(now()) @db.Timestamptz
+
+  // Relations
+  organization Organization @relation(fields: [org_id], references: [id])
+  period       Period       @relation(fields: [period_id], references: [id])
+  scenario     Scenario?    @relation(fields: [scenario_id], references: [id])
+
+  @@index([org_id, period_id, scenario_id])
+  @@map("financial_snapshots")
+}
+
+// ─────────────────────────────────────────
+// COUCHE 7 — KPIs & ALERTES
+// ─────────────────────────────────────────
+
+model Kpi {
+  id                 String      @id @default(cuid())
+  org_id             String
+  code               String      @db.VarChar(50)   // ex: EBITDA_MARGIN
+  label              String      @db.VarChar(200)
+  category           KpiCategory @default(PROFITABILITY)
+  formula            String?     @db.Text
+  unit               String      @db.VarChar(20)   // %, FCFA, jours
+  threshold_warn     Decimal?    @db.Decimal(18, 4)
+  threshold_critical Decimal?    @db.Decimal(18, 4)
+  is_custom          Boolean     @default(false)
+  is_active          Boolean     @default(true)
+  created_at         DateTime    @default(now()) @db.Timestamptz
+
+  // Relations
+  organization Organization @relation(fields: [org_id], references: [id])
+  kpi_values   KpiValue[]
+  alerts       Alert[]
+
+  @@unique([org_id, code])
+  @@map("kpis")
+}
+
+model KpiValue {
+  id           String        @id @default(cuid())
+  org_id       String
+  kpi_id       String
+  period_id    String
+  scenario_id  String?
+  value        Decimal       @db.Decimal(18, 4)
+  value_budget Decimal?      @db.Decimal(18, 4)
+  severity     AlertSeverity @default(INFO)
+  computed_at  DateTime      @default(now()) @db.Timestamptz
+
+  // Relations
+  organization Organization @relation(fields: [org_id], references: [id])
+  kpi          Kpi          @relation(fields: [kpi_id], references: [id])
+  period       Period       @relation(fields: [period_id], references: [id])
+  scenario     Scenario?    @relation(fields: [scenario_id], references: [id])
+
+  @@index([org_id, kpi_id, period_id])
+  @@map("kpi_values")
+}
+
+model Alert {
+  id           String        @id @default(cuid())
+  org_id       String
+  kpi_id       String?
+  period_id    String?
+  type         AlertType
+  severity     AlertSeverity
+  message      String        @db.Text
+  is_read      Boolean       @default(false)
+  notified_at  DateTime?     @db.Timestamptz
+  created_at   DateTime      @default(now()) @db.Timestamptz
+
+  // Relations
+  organization Organization @relation(fields: [org_id], references: [id])
+  kpi          Kpi?         @relation(fields: [kpi_id], references: [id])
+  period       Period?      @relation(fields: [period_id], references: [id])
+
+  @@index([org_id, is_read, severity])
+  @@map("alerts")
+}

@@ -1,0 +1,881 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Stack Technologique — FP&A SaaS PME</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Mono:wght@300;400;500&family=Instrument+Serif:ital@0;1&display=swap');
+
+  :root {
+    --bg: #0a0e1a;
+    --surface: #111827;
+    --surface2: #1a2235;
+    --border: #1e2d45;
+    --accent: #00d4a0;
+    --accent2: #3b82f6;
+    --accent3: #f59e0b;
+    --accent4: #ec4899;
+    --text: #e2e8f0;
+    --muted: #64748b;
+    --white: #ffffff;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: 'DM Mono', monospace;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.7;
+    overflow-x: hidden;
+  }
+
+  /* ── HERO ── */
+  .hero {
+    position: relative;
+    padding: 80px 60px 60px;
+    border-bottom: 1px solid var(--border);
+    overflow: hidden;
+  }
+  .hero::before {
+    content: '';
+    position: absolute;
+    top: -200px; right: -200px;
+    width: 600px; height: 600px;
+    background: radial-gradient(circle, rgba(0,212,160,0.08) 0%, transparent 70%);
+    pointer-events: none;
+  }
+  .hero::after {
+    content: '';
+    position: absolute;
+    bottom: -100px; left: -100px;
+    width: 400px; height: 400px;
+    background: radial-gradient(circle, rgba(59,130,246,0.06) 0%, transparent 70%);
+    pointer-events: none;
+  }
+  .badge {
+    display: inline-block;
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: var(--accent);
+    border: 1px solid rgba(0,212,160,0.3);
+    padding: 4px 12px;
+    border-radius: 20px;
+    margin-bottom: 24px;
+  }
+  .hero h1 {
+    font-family: 'Syne', sans-serif;
+    font-size: clamp(32px, 5vw, 56px);
+    font-weight: 800;
+    line-height: 1.1;
+    color: var(--white);
+    max-width: 700px;
+  }
+  .hero h1 span { color: var(--accent); }
+  .hero-sub {
+    font-family: 'Instrument Serif', serif;
+    font-style: italic;
+    color: var(--muted);
+    font-size: 18px;
+    margin-top: 16px;
+    max-width: 550px;
+  }
+  .hero-meta {
+    display: flex;
+    gap: 32px;
+    margin-top: 40px;
+    flex-wrap: wrap;
+  }
+  .hero-meta-item { font-size: 12px; color: var(--muted); }
+  .hero-meta-item strong { color: var(--accent); display: block; font-size: 14px; margin-bottom: 2px; }
+
+  /* ── LAYOUT ── */
+  .container { max-width: 1200px; margin: 0 auto; padding: 60px; }
+  .section { margin-bottom: 80px; }
+  .section-label {
+    font-size: 11px;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-bottom: 8px;
+  }
+  .section-title {
+    font-family: 'Syne', sans-serif;
+    font-size: 28px;
+    font-weight: 700;
+    color: var(--white);
+    margin-bottom: 32px;
+  }
+
+  /* ── ARCHITECTURE DIAGRAM ── */
+  .arch-diagram {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 40px;
+    margin-bottom: 48px;
+    position: relative;
+    overflow: hidden;
+  }
+  .arch-diagram::before {
+    content: 'ARCHITECTURE';
+    position: absolute;
+    top: 20px; right: 24px;
+    font-size: 10px;
+    letter-spacing: 0.2em;
+    color: var(--border);
+  }
+  .arch-layers {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .arch-layer {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .arch-layer-label {
+    font-size: 10px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--muted);
+    width: 90px;
+    flex-shrink: 0;
+    text-align: right;
+  }
+  .arch-layer-boxes {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    flex: 1;
+  }
+  .arch-box {
+    padding: 8px 16px;
+    border-radius: 8px;
+    font-size: 12px;
+    font-weight: 500;
+    border: 1px solid;
+    white-space: nowrap;
+  }
+  .arch-box.green { background: rgba(0,212,160,0.08); border-color: rgba(0,212,160,0.3); color: var(--accent); }
+  .arch-box.blue  { background: rgba(59,130,246,0.08); border-color: rgba(59,130,246,0.3); color: var(--accent2); }
+  .arch-box.amber { background: rgba(245,158,11,0.08); border-color: rgba(245,158,11,0.3); color: var(--accent3); }
+  .arch-box.pink  { background: rgba(236,72,153,0.08); border-color: rgba(236,72,153,0.3); color: var(--accent4); }
+  .arch-box.gray  { background: rgba(100,116,139,0.1); border-color: rgba(100,116,139,0.3); color: var(--muted); }
+  .arch-connector {
+    width: 90px;
+    display: flex;
+    justify-content: flex-end;
+    align-items: center;
+    padding-right: 12px;
+  }
+  .arch-arrow {
+    width: 1px;
+    height: 12px;
+    background: var(--border);
+    margin: 0 auto;
+    position: relative;
+  }
+
+  /* ── TECH GRID ── */
+  .tech-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+    gap: 20px;
+  }
+  .tech-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 28px;
+    position: relative;
+    transition: border-color 0.2s;
+  }
+  .tech-card:hover { border-color: var(--accent); }
+  .tech-card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 20px;
+  }
+  .tech-card-icon {
+    width: 40px; height: 40px;
+    border-radius: 10px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 20px;
+  }
+  .tech-card-icon.green { background: rgba(0,212,160,0.1); }
+  .tech-card-icon.blue  { background: rgba(59,130,246,0.1); }
+  .tech-card-icon.amber { background: rgba(245,158,11,0.1); }
+  .tech-card-icon.pink  { background: rgba(236,72,153,0.1); }
+  .tech-tier {
+    font-size: 10px;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    padding: 3px 10px;
+    border-radius: 20px;
+  }
+  .tier-primary { background: rgba(0,212,160,0.1); color: var(--accent); }
+  .tier-secondary { background: rgba(59,130,246,0.1); color: var(--accent2); }
+  .tier-infra { background: rgba(245,158,11,0.1); color: var(--accent3); }
+  .tech-card h3 {
+    font-family: 'Syne', sans-serif;
+    font-size: 16px;
+    font-weight: 700;
+    color: var(--white);
+    margin-bottom: 6px;
+  }
+  .tech-card-category {
+    font-size: 11px;
+    color: var(--muted);
+    margin-bottom: 16px;
+  }
+  .tech-choice {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    margin-bottom: 14px;
+    padding-bottom: 14px;
+    border-bottom: 1px solid var(--border);
+  }
+  .tech-choice:last-child { border-bottom: none; margin-bottom: 0; padding-bottom: 0; }
+  .tech-choice-name {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--white);
+    white-space: nowrap;
+    min-width: 100px;
+  }
+  .tech-choice-name.recommended { color: var(--accent); }
+  .tech-choice-reason {
+    font-size: 12px;
+    color: var(--muted);
+    line-height: 1.5;
+  }
+  .rec-dot {
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: var(--accent);
+    margin-top: 5px;
+    flex-shrink: 0;
+  }
+  .other-dot {
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: var(--border);
+    margin-top: 5px;
+    flex-shrink: 0;
+  }
+
+  /* ── DECISION TABLE ── */
+  .decision-table {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    overflow: hidden;
+    width: 100%;
+  }
+  .dt-header {
+    display: grid;
+    grid-template-columns: 1.5fr 1fr 1fr 1fr 1fr;
+    padding: 14px 24px;
+    background: var(--surface2);
+    font-size: 11px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--muted);
+    border-bottom: 1px solid var(--border);
+  }
+  .dt-row {
+    display: grid;
+    grid-template-columns: 1.5fr 1fr 1fr 1fr 1fr;
+    padding: 14px 24px;
+    border-bottom: 1px solid var(--border);
+    align-items: center;
+    font-size: 13px;
+  }
+  .dt-row:last-child { border-bottom: none; }
+  .dt-row:hover { background: var(--surface2); }
+  .dt-tech { color: var(--white); font-weight: 500; }
+  .dot-full  { color: var(--accent); }
+  .dot-half  { color: var(--accent3); }
+  .dot-empty { color: var(--border); }
+
+  /* ── COST SECTION ── */
+  .cost-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 16px;
+  }
+  .cost-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 24px;
+    text-align: center;
+  }
+  .cost-card h4 {
+    font-family: 'Syne', sans-serif;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    margin-bottom: 12px;
+  }
+  .cost-amount {
+    font-family: 'Syne', sans-serif;
+    font-size: 28px;
+    font-weight: 800;
+    color: var(--white);
+    margin-bottom: 4px;
+  }
+  .cost-period { font-size: 11px; color: var(--muted); margin-bottom: 16px; }
+  .cost-items { text-align: left; font-size: 12px; color: var(--muted); line-height: 2; }
+  .cost-items span { color: var(--text); }
+
+  /* ── ROADMAP ── */
+  .roadmap {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 20px;
+  }
+  .roadmap-phase {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 28px;
+    position: relative;
+  }
+  .roadmap-phase::before {
+    content: attr(data-phase);
+    position: absolute;
+    top: -1px; left: 24px;
+    font-size: 10px;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    padding: 3px 12px;
+    border-radius: 0 0 8px 8px;
+  }
+  .phase-v1::before { background: rgba(0,212,160,0.15); color: var(--accent); }
+  .phase-v2::before { background: rgba(59,130,246,0.15); color: var(--accent2); }
+  .phase-v3::before { background: rgba(245,158,11,0.15); color: var(--accent3); }
+  .roadmap-phase h4 {
+    font-family: 'Syne', sans-serif;
+    font-size: 15px;
+    font-weight: 700;
+    color: var(--white);
+    margin: 20px 0 16px;
+  }
+  .roadmap-item {
+    font-size: 12px;
+    color: var(--muted);
+    padding: 6px 0;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .roadmap-item:last-child { border-bottom: none; }
+  .roadmap-item::before { content: '→'; color: var(--accent); font-size: 10px; }
+
+  /* ── FOOTER NOTE ── */
+  .footer-note {
+    background: var(--surface);
+    border: 1px solid rgba(0,212,160,0.2);
+    border-radius: 12px;
+    padding: 24px 32px;
+    display: flex;
+    gap: 16px;
+    align-items: flex-start;
+    margin-top: 60px;
+  }
+  .footer-note-icon { font-size: 24px; flex-shrink: 0; margin-top: 2px; }
+  .footer-note-text { font-size: 13px; color: var(--muted); line-height: 1.7; }
+  .footer-note-text strong { color: var(--accent); }
+
+  @media (max-width: 768px) {
+    .container { padding: 32px 20px; }
+    .hero { padding: 48px 24px; }
+    .cost-grid, .roadmap { grid-template-columns: 1fr; }
+    .dt-header, .dt-row { grid-template-columns: 1.5fr 1fr 1fr; }
+    .dt-header > *:nth-child(4), .dt-header > *:nth-child(5),
+    .dt-row > *:nth-child(4), .dt-row > *:nth-child(5) { display: none; }
+  }
+</style>
+</head>
+<body>
+
+<!-- HERO -->
+<div class="hero">
+  <div class="badge">Document Technique v1.0</div>
+  <h1>Stack Technologique<br/><span>FP&A SaaS PME</span><br/>Afrique de l'Ouest</h1>
+  <p class="hero-sub">Architecture recommandée pour un SaaS multi-tenant de planification financière, optimisée pour les contraintes du marché ouest-africain.</p>
+  <div class="hero-meta">
+    <div class="hero-meta-item"><strong>Architecture</strong>SaaS Multi-Tenant</div>
+    <div class="hero-meta-item"><strong>Cible</strong>PME Afrique de l'Ouest</div>
+    <div class="hero-meta-item"><strong>Norme</strong>SYSCOHADA / OHADA</div>
+    <div class="hero-meta-item"><strong>Devise</strong>FCFA (XOF/XAF) + Multi-devise</div>
+  </div>
+</div>
+
+<div class="container">
+
+  <!-- ARCHITECTURE OVERVIEW -->
+  <div class="section">
+    <div class="section-label">Vue d'ensemble</div>
+    <div class="section-title">Architecture en couches</div>
+    <div class="arch-diagram">
+      <div class="arch-layers">
+        <div class="arch-layer">
+          <div class="arch-layer-label">Client</div>
+          <div class="arch-layer-boxes">
+            <div class="arch-box green">React 18 + TypeScript</div>
+            <div class="arch-box green">TailwindCSS</div>
+            <div class="arch-box green">Recharts / D3.js</div>
+            <div class="arch-box green">React Native (mobile)</div>
+          </div>
+        </div>
+        <div class="arch-layer">
+          <div class="arch-layer-label">Gateway</div>
+          <div class="arch-layer-boxes">
+            <div class="arch-box blue">API Gateway (Kong)</div>
+            <div class="arch-box blue">Rate Limiting</div>
+            <div class="arch-box blue">JWT Auth</div>
+            <div class="arch-box blue">SSL/TLS</div>
+          </div>
+        </div>
+        <div class="arch-layer">
+          <div class="arch-layer-label">Services</div>
+          <div class="arch-layer-boxes">
+            <div class="arch-box amber">AuthService (Node.js)</div>
+            <div class="arch-box amber">BudgetService (Node.js)</div>
+            <div class="arch-box amber">ImportService (Python)</div>
+            <div class="arch-box amber">CalcEngine (Python)</div>
+            <div class="arch-box amber">NotifService (Node.js)</div>
+            <div class="arch-box amber">ScenarioService (Node.js)</div>
+          </div>
+        </div>
+        <div class="arch-layer">
+          <div class="arch-layer-label">Async</div>
+          <div class="arch-layer-boxes">
+            <div class="arch-box pink">Redis Queue (BullMQ)</div>
+            <div class="arch-box pink">WebSocket (Socket.io)</div>
+            <div class="arch-box pink">Cron Jobs</div>
+          </div>
+        </div>
+        <div class="arch-layer">
+          <div class="arch-layer-label">Data</div>
+          <div class="arch-layer-boxes">
+            <div class="arch-box green">PostgreSQL (principal)</div>
+            <div class="arch-box green">Redis (cache + sessions)</div>
+            <div class="arch-box green">S3-compatible (fichiers)</div>
+          </div>
+        </div>
+        <div class="arch-layer">
+          <div class="arch-layer-label">Infra</div>
+          <div class="arch-layer-boxes">
+            <div class="arch-box gray">Docker + Kubernetes</div>
+            <div class="arch-box gray">AWS / DigitalOcean (région Afrique)</div>
+            <div class="arch-box gray">Cloudflare CDN</div>
+            <div class="arch-box gray">GitHub Actions CI/CD</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- TECH CARDS -->
+  <div class="section">
+    <div class="section-label">Choix technologiques</div>
+    <div class="section-title">Stack détaillée par couche</div>
+    <div class="tech-grid">
+
+      <!-- FRONTEND -->
+      <div class="tech-card">
+        <div class="tech-card-header">
+          <div class="tech-card-icon green">🖥️</div>
+          <span class="tech-tier tier-primary">Frontend</span>
+        </div>
+        <h3>Interface Utilisateur</h3>
+        <div class="tech-card-category">Web + Mobile</div>
+        <div class="tech-choice">
+          <div class="rec-dot"></div>
+          <div>
+            <div class="tech-choice-name recommended">React 18 + TypeScript</div>
+            <div class="tech-choice-reason">Écosystème riche, composants réutilisables, typage fort indispensable pour la logique financière complexe.</div>
+          </div>
+        </div>
+        <div class="tech-choice">
+          <div class="rec-dot"></div>
+          <div>
+            <div class="tech-choice-name recommended">TailwindCSS</div>
+            <div class="tech-choice-reason">Développement UI rapide, design system cohérent, bundle optimisé. Idéal pour équipe réduite.</div>
+          </div>
+        </div>
+        <div class="tech-choice">
+          <div class="rec-dot"></div>
+          <div>
+            <div class="tech-choice-name recommended">Recharts + AG Grid</div>
+            <div class="tech-choice-reason">Recharts pour les graphiques KPIs. AG Grid pour les tableaux budgétaires style Excel — expérience familière pour les DAF.</div>
+          </div>
+        </div>
+        <div class="tech-choice">
+          <div class="other-dot"></div>
+          <div>
+            <div class="tech-choice-name">React Native (V2)</div>
+            <div class="tech-choice-reason">App mobile pour dashboard CEO. Partage de code avec le web frontend.</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- BACKEND -->
+      <div class="tech-card">
+        <div class="tech-card-header">
+          <div class="tech-card-icon blue">⚙️</div>
+          <span class="tech-tier tier-primary">Backend</span>
+        </div>
+        <h3>Services Métier</h3>
+        <div class="tech-card-category">API REST + Microservices</div>
+        <div class="tech-choice">
+          <div class="rec-dot"></div>
+          <div>
+            <div class="tech-choice-name recommended">Node.js + NestJS</div>
+            <div class="tech-choice-reason">Architecture modulaire, injection de dépendances, TypeScript natif. Parfait pour les services CRUD (Auth, Budget, Scénarios, Notifications).</div>
+          </div>
+        </div>
+        <div class="tech-choice">
+          <div class="rec-dot"></div>
+          <div>
+            <div class="tech-choice-name recommended">Python + FastAPI</div>
+            <div class="tech-choice-reason">Pour le moteur de calcul financier et l'import Excel. Pandas pour la manipulation de données, NumPy pour les calculs matriciels.</div>
+          </div>
+        </div>
+        <div class="tech-choice">
+          <div class="rec-dot"></div>
+          <div>
+            <div class="tech-choice-name recommended">Kong API Gateway</div>
+            <div class="tech-choice-reason">Rate limiting, auth centralisée, logs, routing vers les microservices. Open-source et battle-tested.</div>
+          </div>
+        </div>
+        <div class="tech-choice">
+          <div class="other-dot"></div>
+          <div>
+            <div class="tech-choice-name">GraphQL (V3)</div>
+            <div class="tech-choice-reason">Envisageable en V3 pour les requêtes de reporting complexes (multi-entités, consolidation).</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- DATABASE -->
+      <div class="tech-card">
+        <div class="tech-card-header">
+          <div class="tech-card-icon amber">🗄️</div>
+          <span class="tech-tier tier-primary">Base de données</span>
+        </div>
+        <h3>Persistance & Cache</h3>
+        <div class="tech-card-category">Données financières & sessions</div>
+        <div class="tech-choice">
+          <div class="rec-dot"></div>
+          <div>
+            <div class="tech-choice-name recommended">PostgreSQL 16</div>
+            <div class="tech-choice-reason">ACID compliance indispensable pour les données financières. Support JSON, types Decimal précis (pas de float!), Row-Level Security pour le multi-tenant.</div>
+          </div>
+        </div>
+        <div class="tech-choice">
+          <div class="rec-dot"></div>
+          <div>
+            <div class="tech-choice-name recommended">Redis 7</div>
+            <div class="tech-choice-reason">Cache des sessions JWT, job queue (BullMQ), pub/sub pour les WebSockets de progression d'import en temps réel.</div>
+          </div>
+        </div>
+        <div class="tech-choice">
+          <div class="rec-dot"></div>
+          <div>
+            <div class="tech-choice-name recommended">Prisma ORM</div>
+            <div class="tech-choice-reason">Migrations typées, schéma as code, auto-génération des types TypeScript. Zéro SQL brut dangereux.</div>
+          </div>
+        </div>
+        <div class="tech-choice">
+          <div class="other-dot"></div>
+          <div>
+            <div class="tech-choice-name">TimescaleDB (V3)</div>
+            <div class="tech-choice-reason">Extension PostgreSQL pour les séries temporelles — utile si on ajoute de l'IA prédictive sur les KPIs.</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- AUTH & SÉCURITÉ -->
+      <div class="tech-card">
+        <div class="tech-card-header">
+          <div class="tech-card-icon pink">🔐</div>
+          <span class="tech-tier tier-primary">Sécurité</span>
+        </div>
+        <h3>Auth & Conformité</h3>
+        <div class="tech-card-category">Données financières sensibles</div>
+        <div class="tech-choice">
+          <div class="rec-dot"></div>
+          <div>
+            <div class="tech-choice-name recommended">JWT + Refresh Token</div>
+            <div class="tech-choice-reason">Access token 8h, refresh token 30j. Stockage en mémoire côté client (jamais localStorage). Rotation automatique.</div>
+          </div>
+        </div>
+        <div class="tech-choice">
+          <div class="rec-dot"></div>
+          <div>
+            <div class="tech-choice-name recommended">bcrypt (argon2)</div>
+            <div class="tech-choice-reason">Hachage des mots de passe. Argon2id recommandé — résistant aux attaques GPU, standard OWASP 2024.</div>
+          </div>
+        </div>
+        <div class="tech-choice">
+          <div class="rec-dot"></div>
+          <div>
+            <div class="tech-choice-name recommended">Row-Level Security</div>
+            <div class="tech-choice-reason">Isolation multi-tenant au niveau PostgreSQL. Même si un bug applicatif survient, un tenant ne voit jamais les données d'un autre.</div>
+          </div>
+        </div>
+        <div class="tech-choice">
+          <div class="other-dot"></div>
+          <div>
+            <div class="tech-choice-name">2FA TOTP (V2)</div>
+            <div class="tech-choice-reason">Authentification à 2 facteurs pour les comptes DAF/Admin. Google Authenticator compatible.</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ASYNC & TEMPS RÉEL -->
+      <div class="tech-card">
+        <div class="tech-card-header">
+          <div class="tech-card-icon green">⚡</div>
+          <span class="tech-tier tier-secondary">Async</span>
+        </div>
+        <h3>Traitement asynchrone</h3>
+        <div class="tech-card-category">Jobs longue durée & temps réel</div>
+        <div class="tech-choice">
+          <div class="rec-dot"></div>
+          <div>
+            <div class="tech-choice-name recommended">BullMQ (Redis)</div>
+            <div class="tech-choice-reason">Queue de jobs pour import Excel, recalculs financiers, génération de rapports PDF. Retry automatique, monitoring intégré.</div>
+          </div>
+        </div>
+        <div class="tech-choice">
+          <div class="rec-dot"></div>
+          <div>
+            <div class="tech-choice-name recommended">Socket.io</div>
+            <div class="tech-choice-reason">WebSocket pour la progression en temps réel (import, calcul de scénario). Fallback long-polling si réseau instable.</div>
+          </div>
+        </div>
+        <div class="tech-choice">
+          <div class="rec-dot"></div>
+          <div>
+            <div class="tech-choice-name recommended">node-cron</div>
+            <div class="tech-choice-reason">Recalcul automatique des KPIs chaque nuit. Envoi des alertes hebdomadaires. Clôture automatique des périodes.</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- INFRA & DÉPLOIEMENT -->
+      <div class="tech-card">
+        <div class="tech-card-header">
+          <div class="tech-card-icon blue">☁️</div>
+          <span class="tech-tier tier-infra">Infrastructure</span>
+        </div>
+        <h3>Hébergement & CI/CD</h3>
+        <div class="tech-card-category">Optimisé Afrique de l'Ouest</div>
+        <div class="tech-choice">
+          <div class="rec-dot"></div>
+          <div>
+            <div class="tech-choice-name recommended">DigitalOcean (Lagos)</div>
+            <div class="tech-choice-reason">Datacenter Lagos, Nigeria — latence < 30ms pour l'Afrique de l'Ouest. Tarifs accessibles, Kubernetes managé.</div>
+          </div>
+        </div>
+        <div class="tech-choice">
+          <div class="rec-dot"></div>
+          <div>
+            <div class="tech-choice-name recommended">Docker + Kubernetes</div>
+            <div class="tech-choice-reason">Conteneurisation de chaque microservice. Scaling horizontal automatique en pic de charge (clôture budgétaire fin de mois).</div>
+          </div>
+        </div>
+        <div class="tech-choice">
+          <div class="rec-dot"></div>
+          <div>
+            <div class="tech-choice-name recommended">Cloudflare CDN</div>
+            <div class="tech-choice-reason">Cache des assets statiques, protection DDoS, acceleration réseau Afrique. Gratuit jusqu'à fort volume.</div>
+          </div>
+        </div>
+        <div class="tech-choice">
+          <div class="other-dot"></div>
+          <div>
+            <div class="tech-choice-name">AWS Cape Town (V2)</div>
+            <div class="tech-choice-reason">Alternative si la base client s'étend à l'Afrique australe et orientale.</div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- DECISION MATRIX -->
+  <div class="section">
+    <div class="section-label">Matrice de décision</div>
+    <div class="section-title">Pourquoi ces choix vs les alternatives</div>
+    <div class="decision-table">
+      <div class="dt-header">
+        <div>Technologie</div>
+        <div>Performance</div>
+        <div>Coût</div>
+        <div>Talent local</div>
+        <div>Conformité</div>
+      </div>
+      <div class="dt-row">
+        <div class="dt-tech">✅ PostgreSQL</div>
+        <div class="dot-full">●●●●●</div>
+        <div class="dot-full">●●●●●</div>
+        <div class="dot-full">●●●●○</div>
+        <div class="dot-full">●●●●●</div>
+      </div>
+      <div class="dt-row">
+        <div class="dt-tech">✅ Node.js + NestJS</div>
+        <div class="dot-full">●●●●○</div>
+        <div class="dot-full">●●●●●</div>
+        <div class="dot-full">●●●●●</div>
+        <div class="dot-full">●●●●○</div>
+      </div>
+      <div class="dt-row">
+        <div class="dt-tech">✅ Python (CalcEngine)</div>
+        <div class="dot-full">●●●●●</div>
+        <div class="dot-full">●●●●●</div>
+        <div class="dot-full">●●●●○</div>
+        <div class="dot-full">●●●●○</div>
+      </div>
+      <div class="dt-row">
+        <div class="dt-tech">✅ React + TypeScript</div>
+        <div class="dot-full">●●●●○</div>
+        <div class="dot-full">●●●●●</div>
+        <div class="dot-full">●●●●●</div>
+        <div class="dot-full">●●●●○</div>
+      </div>
+      <div class="dt-row">
+        <div class="dt-tech">❌ MongoDB</div>
+        <div class="dot-half">●●●○○</div>
+        <div class="dot-full">●●●●●</div>
+        <div class="dot-full">●●●●○</div>
+        <div class="dot-empty">●○○○○</div>
+      </div>
+      <div class="dt-row">
+        <div class="dt-tech">❌ Firebase</div>
+        <div class="dot-half">●●●○○</div>
+        <div class="dot-half">●●○○○</div>
+        <div class="dot-half">●●●○○</div>
+        <div class="dot-half">●●○○○</div>
+      </div>
+      <div class="dt-row">
+        <div class="dt-tech">❌ PHP / Laravel</div>
+        <div class="dot-half">●●●○○</div>
+        <div class="dot-full">●●●●●</div>
+        <div class="dot-full">●●●●●</div>
+        <div class="dot-half">●●●○○</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- COÛTS INFRASTRUCTURE -->
+  <div class="section">
+    <div class="section-label">Budget infrastructure</div>
+    <div class="section-title">Coûts estimés par phase</div>
+    <div class="cost-grid">
+      <div class="cost-card">
+        <h4>MVP / V1</h4>
+        <div class="cost-amount">~150$</div>
+        <div class="cost-period">par mois</div>
+        <div class="cost-items">
+          <div>→ <span>DigitalOcean Droplet 4Go RAM</span></div>
+          <div>→ <span>PostgreSQL Managed DB</span></div>
+          <div>→ <span>Redis Managed Cache</span></div>
+          <div>→ <span>Cloudflare Free</span></div>
+          <div>→ <span>S3-compatible (Spaces)</span></div>
+        </div>
+      </div>
+      <div class="cost-card">
+        <h4>V2 — Croissance</h4>
+        <div class="cost-amount">~400$</div>
+        <div class="cost-period">par mois (50 clients)</div>
+        <div class="cost-items">
+          <div>→ <span>Kubernetes cluster 3 nodes</span></div>
+          <div>→ <span>PostgreSQL HA (réplication)</span></div>
+          <div>→ <span>Redis Cluster</span></div>
+          <div>→ <span>Cloudflare Pro</span></div>
+          <div>→ <span>Monitoring (Datadog)</span></div>
+        </div>
+      </div>
+      <div class="cost-card">
+        <h4>V3 — Scale</h4>
+        <div class="cost-amount">~1200$</div>
+        <div class="cost-period">par mois (200+ clients)</div>
+        <div class="cost-items">
+          <div>→ <span>Multi-region (Lagos + Dakar)</span></div>
+          <div>→ <span>Auto-scaling avancé</span></div>
+          <div>→ <span>TimescaleDB + IA</span></div>
+          <div>→ <span>CDN étendu</span></div>
+          <div>→ <span>SOC 2 compliance tools</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ROADMAP TECHNIQUE -->
+  <div class="section">
+    <div class="section-label">Roadmap technique</div>
+    <div class="section-title">Déploiement progressif de la stack</div>
+    <div class="roadmap">
+      <div class="roadmap-phase phase-v1" data-phase="V1 — Mois 1 à 6">
+        <h4>Fondations</h4>
+        <div class="roadmap-item">Setup PostgreSQL + schéma multi-tenant</div>
+        <div class="roadmap-item">AuthService JWT + RBAC</div>
+        <div class="roadmap-item">BudgetService CRUD + BulletMQ</div>
+        <div class="roadmap-item">CalcEngine Python (Budget vs Réel)</div>
+        <div class="roadmap-item">Frontend React dashboard de base</div>
+        <div class="roadmap-item">Import Excel (SheetJS + Pandas)</div>
+        <div class="roadmap-item">CI/CD GitHub Actions → DigitalOcean</div>
+        <div class="roadmap-item">AuditLog complet</div>
+      </div>
+      <div class="roadmap-phase phase-v2" data-phase="V2 — Mois 7 à 12">
+        <h4>Enrichissement</h4>
+        <div class="roadmap-item">ScenarioService + moteur What-If</div>
+        <div class="roadmap-item">WebSocket temps réel (Socket.io)</div>
+        <div class="roadmap-item">Connector Sage 100 API</div>
+        <div class="roadmap-item">Connector Wave / Orange Money API</div>
+        <div class="roadmap-item">App mobile React Native (CEO)</div>
+        <div class="roadmap-item">2FA TOTP pour DAF/Admin</div>
+        <div class="roadmap-item">Export PDF (rapports financiers)</div>
+        <div class="roadmap-item">Kubernetes + auto-scaling</div>
+      </div>
+      <div class="roadmap-phase phase-v3" data-phase="V3 — Mois 13 à 18">
+        <h4>Intelligence</h4>
+        <div class="roadmap-item">IA prédictive (TimescaleDB + Prophet)</div>
+        <div class="roadmap-item">Consolidation multi-entités</div>
+        <div class="roadmap-item">API ouverte (webhooks)</div>
+        <div class="roadmap-item">GraphQL pour reporting avancé</div>
+        <div class="roadmap-item">Connector Odoo</div>
+        <div class="roadmap-item">Multi-région (Lagos + Dakar)</div>
+        <div class="roadmap-item">Marketplace d'intégrations</div>
+        <div class="roadmap-item">Conformité SOC 2 Type I</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- NOTE FINALE -->
+  <div class="footer-note">
+    <div class="footer-note-icon">💡</div>
+    <div class="footer-note-text">
+      <strong>Principe directeur :</strong> La stack recommandée privilégie <strong>la fiabilité des données financières avant la sophistication technique</strong>. PostgreSQL avec ACID compliance et Row-Level Security garantit qu'un DAF ne verra jamais les données d'une autre organisation — même en cas de bug applicatif. Python pour le moteur de calcul garantit une précision décimale parfaite, critique pour les états financiers. L'hébergement à Lagos réduit la latence pour les utilisateurs d'Afrique de l'Ouest de 200ms à moins de 30ms, ce qui change radicalement l'expérience utilisateur sur connexions 3G/4G.
+    </div>
+  </div>
+
+</div>
+</body>
+</html>

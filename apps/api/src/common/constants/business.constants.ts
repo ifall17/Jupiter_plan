@@ -1,0 +1,10 @@
+export const MAX_AUDIT_SESSIONS = 5;
+export const MAX_SCENARIO_COMPARE = 4;
+export const MAX_IMPORT_SIZE_MB = 10;
+export const CACHE_TTL_KPI = 300;
+export const JWT_ACCESS_EXPIRY = '8h';
+export const JWT_REFRESH_EXPIRY = '30d';
+export const DEFAULT_PAGE_LIMIT = 20;
+export const DEFAULT_CURRENCY = 'XOF';
+export const LOGIN_RATE_LIMIT = 5;
+export const BRUTE_FORCE_LOCKOUT = 900;

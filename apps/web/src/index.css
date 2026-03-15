@@ -1,0 +1,259 @@
+/* Import Google Fonts */
+@import url('https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=Outfit:wght@300;400;500;600;700&display=swap');
+
+/* Design tokens */
+:root {
+  /* Palette principale */
+  --ink: #1a1a2e;
+  --ink-soft: #2e2e45;
+  --terra: #c4622d;
+  --terra-lt: #f0e8e2;
+  --gold: #b8963e;
+  --gold-lt: #f5edd8;
+  --kola: #2d6a4f;
+  --kola-lt: #dff0e8;
+  --indigo: #3d5a99;
+  --indigo-lt: #e2e8f5;
+
+  /* Surfaces */
+  --page: #faf8f4;
+  --surface: #ffffff;
+  --surface2: #f4f1ec;
+  --border: #e8e2d9;
+
+  /* Texte */
+  --text-hi: #1a1a2e;
+  --text-md: #5a5570;
+  --text-lo: #9990a8;
+
+  /* Shadows */
+  --shadow-sm: 0 1px 3px rgba(26, 26, 46, 0.06);
+  --shadow-md: 0 4px 16px rgba(26, 26, 46, 0.08);
+
+  /* Typography */
+  --font-serif: 'DM Serif Display', Georgia, serif;
+  --font-body: 'Outfit', 'Segoe UI', sans-serif;
+
+  /* Legacy aliases (backward compatibility) */
+  --color-bg: #faf8f4;
+  --color-surface: #ffffff;
+  --color-border: #e8e2d9;
+  --color-text: #1a1a2e;
+  --color-muted: #5a5570;
+  --color-terra: #c4622d;
+  --color-gold: #b8963e;
+  --color-kola: #2d6a4f;
+  --color-indigo: #3d5a99;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: var(--font-body);
+  background-color: var(--page);
+  color: var(--text-hi);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+/* Dashboard layout */
+.dashboard-page {
+  padding: 28px 32px 48px;
+  max-width: 1360px;
+  margin: 0 auto;
+}
+
+.page-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  margin-bottom: 28px;
+}
+
+.page-eyebrow {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--terra);
+  margin-bottom: 4px;
+  margin: 0 0 4px 0;
+}
+
+.page-title {
+  font-family: var(--font-serif);
+  font-size: 28px;
+  color: var(--ink);
+  letter-spacing: -0.02em;
+  margin: 0;
+  font-weight: 400;
+}
+
+.page-sub {
+  font-size: 13px;
+  color: var(--text-md);
+  margin-top: 5px;
+  margin-bottom: 0;
+}
+
+/* KPI Cards */
+.kpi-row {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 16px;
+  margin-bottom: 24px;
+}
+
+.kpi-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 20px 22px;
+  display: flex;
+  gap: 16px;
+  box-shadow: var(--shadow-sm);
+  transition: box-shadow 0.2s, transform 0.2s;
+}
+
+.kpi-card:hover {
+  box-shadow: var(--shadow-md);
+  transform: translateY(-2px);
+}
+
+.kpi-accent {
+  width: 4px;
+  border-radius: 4px;
+  flex-shrink: 0;
+  align-self: stretch;
+}
+
+.kpi-card.terra .kpi-accent {
+  background: var(--terra);
+}
+
+.kpi-card.gold .kpi-accent {
+  background: var(--gold);
+}
+
+.kpi-card.kola .kpi-accent {
+  background: var(--kola);
+}
+
+.kpi-card.indigo .kpi-accent {
+  background: var(--indigo);
+}
+
+.kpi-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.kpi-label {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-lo);
+  margin: 0;
+}
+
+.kpi-value {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--text-hi);
+  letter-spacing: -0.02em;
+  line-height: 1;
+  margin: 0;
+}
+
+.kpi-sub {
+  font-size: 11px;
+  color: var(--text-md);
+  margin: 0;
+}
+
+.kpi-trend {
+  display: inline-block;
+  font-size: 14px;
+  margin-top: 4px;
+}
+
+/* Charts row */
+.charts-row {
+  display: grid;
+  grid-template-columns: 2fr 1fr;
+  gap: 16px;
+  margin-bottom: 24px;
+}
+
+/* Skeleton pulse animation */
+@keyframes pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
+/* Legacy utility classes */
+.jp-bg {
+  background: var(--page);
+}
+
+.jp-surface {
+  background: var(--surface);
+}
+
+.jp-border {
+  border-color: var(--border);
+}
+
+.jp-text {
+  color: var(--text-hi);
+}
+
+.jp-muted-text {
+  color: var(--text-md);
+}
+
+.jp-btn-terra {
+  background: var(--terra);
+  color: #ffffff;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+/* Responsive mobile */
+@media (max-width: 768px) {
+  .dashboard-page {
+    padding: 16px;
+  }
+
+  .page-title {
+    font-size: 20px;
+  }
+
+  .kpi-row {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 10px;
+  }
+
+  .charts-row {
+    grid-template-columns: 1fr;
+  }
+}

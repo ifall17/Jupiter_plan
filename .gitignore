@@ -1,0 +1,4 @@
+# Test environment files - local credentials only
+apps/api/.env.test
+.env.test
+node_modules

@@ -1,0 +1,14 @@
+fastapi
+uvicorn
+sqlalchemy
+asyncpg
+pandas
+openpyxl
+boto3
+redis
+pydantic
+pytest
+pytest-asyncio
+pytest-cov
+pytest-watch
+# decimal is Python stdlib
