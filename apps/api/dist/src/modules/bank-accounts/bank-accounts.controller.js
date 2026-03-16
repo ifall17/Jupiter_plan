@@ -59,7 +59,7 @@ __decorate([
 ], BankAccountsController.prototype, "list", null);
 __decorate([
     (0, common_1.Post)(),
-    (0, roles_decorator_1.Roles)(enums_1.UserRole.SUPER_ADMIN),
+    (0, roles_decorator_1.Roles)(enums_1.UserRole.SUPER_ADMIN, enums_1.UserRole.FPA),
     (0, common_1.UseGuards)(jwt_auth_guard_1.JwtAuthGuard, roles_guard_1.RolesGuard, org_guard_1.OrgGuard),
     __param(0, (0, common_1.Req)()),
     __param(1, (0, common_1.Body)()),

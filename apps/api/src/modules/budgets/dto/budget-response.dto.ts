@@ -18,6 +18,8 @@ export class BudgetResponseDto {
   status!: BudgetStatus;
   version!: number;
   fiscal_year_id!: string;
+  parent_budget_id!: string | null;
+  is_reference!: boolean;
   submitted_at!: Date | null;
   submitted_by!: string | null;
   approved_at!: Date | null;

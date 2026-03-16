@@ -50,6 +50,7 @@ describe('DashboardService', () => {
     snapshotsRepository = {
       findSummary: jest.fn(),
       findVariancePct: jest.fn(),
+      findVarianceByReferenceBudget: jest.fn(),
       findRunwayWeeks: jest.fn(),
     } as unknown as jest.Mocked<SnapshotsRepository>;
 
@@ -118,6 +119,7 @@ describe('DashboardService', () => {
       net: new Prisma.Decimal('180'),
     });
     snapshotsRepository.findVariancePct.mockResolvedValue('5.23');
+    snapshotsRepository.findVarianceByReferenceBudget.mockResolvedValue([]);
     snapshotsRepository.findRunwayWeeks.mockResolvedValue(8.5);
   });
 
@@ -222,7 +224,7 @@ describe('DashboardService', () => {
     expect(typeof result.is_summary.expenses).toBe('string');
     expect(typeof result.is_summary.ebitda).toBe('string');
     expect(typeof result.is_summary.net).toBe('string');
-    expect(typeof result.variance_pct).toBe('string');
+    expect(Array.isArray(result.variance_pct)).toBe(true);
     expect(typeof result.ca_trend[0].value).toBe('string');
   });
 });

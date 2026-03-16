@@ -23,4 +23,9 @@ __decorate([
     (0, class_validator_1.IsUUID)(),
     __metadata("design:type", String)
 ], CreateBudgetDto.prototype, "fiscal_year_id", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsUUID)(),
+    __metadata("design:type", String)
+], CreateBudgetDto.prototype, "parent_budget_id", void 0);
 //# sourceMappingURL=create-budget.dto.js.map

@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
+import { CashFlowDirection, CashFlowType, Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { BaseRepository } from '../../common/repositories/base.repository';
 import { PaginatedResponseDto } from '../../common/dto/paginated-response.dto';
@@ -9,6 +9,12 @@ export type RepoCashFlowPlan = {
   org_id: string;
   period_id: string;
   week_number: number;
+  planned_date: Date | null;
+  flow_type: CashFlowType;
+  direction: CashFlowDirection;
+  amount: Prisma.Decimal;
+  bank_account_id: string | null;
+  notes: string | null;
   label: string;
   inflow: Prisma.Decimal;
   outflow: Prisma.Decimal;
@@ -56,6 +62,12 @@ export class CashFlowRepository extends BaseRepository<RepoCashFlowPlan> {
         org_id: data.org_id ?? '',
         period_id: data.period_id ?? '',
         week_number: data.week_number ?? 1,
+        planned_date: data.planned_date ?? null,
+        flow_type: data.flow_type,
+        direction: data.direction,
+        amount: data.amount ?? new Prisma.Decimal('0'),
+        bank_account_id: data.bank_account_id ?? null,
+        notes: data.notes ?? null,
         label: data.label ?? '',
         inflow: data.inflow ?? new Prisma.Decimal('0'),
         outflow: data.outflow ?? new Prisma.Decimal('0'),
@@ -70,6 +82,12 @@ export class CashFlowRepository extends BaseRepository<RepoCashFlowPlan> {
       where: { id, org_id: orgId },
       data: {
         label: data.label,
+        planned_date: data.planned_date,
+        flow_type: data.flow_type,
+        direction: data.direction,
+        amount: data.amount,
+        bank_account_id: data.bank_account_id,
+        notes: data.notes,
         inflow: data.inflow,
         outflow: data.outflow,
         balance: data.balance,
@@ -86,6 +104,16 @@ export class CashFlowRepository extends BaseRepository<RepoCashFlowPlan> {
 
   async findByIdInOrg(id: string, orgId: string): Promise<RepoCashFlowPlan | null> {
     return this.prisma.cashFlowPlan.findFirst({ where: { id, org_id: orgId } });
+  }
+
+  async deletePlan(id: string, orgId: string): Promise<void> {
+    const deleted = await this.prisma.cashFlowPlan.deleteMany({
+      where: { id, org_id: orgId },
+    });
+
+    if (deleted.count === 0) {
+      throw new Error('CASHFLOW_NOT_FOUND');
+    }
   }
 
   async findRollingPlans(params: {
@@ -105,8 +133,40 @@ export class CashFlowRepository extends BaseRepository<RepoCashFlowPlan> {
             }
           : {}),
       },
-      orderBy: [{ period_id: 'asc' }, { week_number: 'asc' }],
-      take: 13,
+      orderBy: [{ planned_date: 'asc' }, { period_id: 'asc' }, { week_number: 'asc' }],
+    });
+  }
+
+  async findPeriodById(periodId: string, orgId: string): Promise<{ id: string; start_date: Date } | null> {
+    return this.prisma.period.findFirst({
+      where: { id: periodId, org_id: orgId },
+      select: { id: true, start_date: true },
+    });
+  }
+
+  async findPeriodByDate(orgId: string, plannedDate: Date): Promise<{ id: string; start_date: Date } | null> {
+    return this.prisma.period.findFirst({
+      where: {
+        org_id: orgId,
+        start_date: { lte: plannedDate },
+        end_date: { gte: plannedDate },
+      },
+      select: {
+        id: true,
+        start_date: true,
+      },
+      orderBy: { start_date: 'asc' },
+    });
+  }
+
+  async findBankAccountById(orgId: string, bankAccountId: string): Promise<{ id: string } | null> {
+    return this.prisma.bankAccount.findFirst({
+      where: {
+        id: bankAccountId,
+        org_id: orgId,
+        is_active: true,
+      },
+      select: { id: true },
     });
   }
 

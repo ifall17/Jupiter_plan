@@ -1,4 +1,4 @@
-import { CSSProperties, useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { NavLink } from 'react-router-dom';
 import {
   AlertTriangle,
@@ -37,41 +37,15 @@ const NAV_ITEMS: NavItem[] = [
   { label: 'Parametres', path: '/settings', roles: [UserRole.SUPER_ADMIN], icon: Settings },
 ];
 
-const desktopLinkStyle: CSSProperties = {
-  display: 'inline-flex',
-  alignItems: 'center',
-  gap: 8,
-  padding: '12px 10px',
-  fontSize: 14,
-  fontWeight: 500,
-  borderBottom: '2px solid transparent',
-  textDecoration: 'none',
-  whiteSpace: 'nowrap',
-};
-
-const mobileLinkStyle: CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: 10,
-  padding: '12px 14px',
-  fontSize: 14,
-  fontWeight: 500,
-  borderRadius: 10,
-  textDecoration: 'none',
-};
-
 function LinkItem({ item, onClick, mobile = false }: { item: NavItem; onClick?: () => void; mobile?: boolean }): JSX.Element {
   return (
     <NavLink
       to={item.path}
       onClick={onClick}
-      style={({ isActive }) => ({
-        ...(mobile ? mobileLinkStyle : desktopLinkStyle),
-        color: isActive ? '#c4622d' : '#5a5570',
-        borderBottomColor: mobile ? 'transparent' : isActive ? '#c4622d' : 'transparent',
-        background: mobile && isActive ? 'var(--surface2)' : 'transparent',
-        fontWeight: isActive ? 700 : 500,
-      })}
+      className={({ isActive }) => {
+        const base = mobile ? 'nav-menu-link nav-menu-link-mobile' : 'nav-menu-link nav-menu-link-desktop';
+        return isActive ? `${base} nav-menu-link-active` : base;
+      }}
     >
       <item.icon size={16} />
       <span>{item.label}</span>
@@ -103,37 +77,10 @@ export default function NavMenu(): JSX.Element {
   }, []);
 
   return (
-    <nav
-      style={{
-        position: 'relative',
-        zIndex: 20,
-        background: '#ffffff',
-        borderBottom: '1px solid #e8e2d9',
-      }}
-    >
-      <div
-        style={{
-          maxWidth: '1280px',
-          margin: '0 auto',
-          padding: isMobile ? '0 16px' : '0 24px',
-          minHeight: 52,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          gap: 12,
-        }}
-      >
+    <nav className="nav-menu-root">
+      <div className={`nav-menu-inner ${isMobile ? 'nav-menu-inner-mobile' : 'nav-menu-inner-desktop'}`}>
         {!isMobile ? (
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 2,
-              overflowX: 'auto',
-              scrollbarWidth: 'thin',
-              width: '100%',
-            }}
-          >
+          <div className="nav-menu-desktop-links">
             {filteredItems.map((item) => (
               <LinkItem key={item.path} item={item} />
             ))}
@@ -142,35 +89,17 @@ export default function NavMenu(): JSX.Element {
           <button
             type="button"
             onClick={() => setOpen((value) => !value)}
-            style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: 8,
-              minHeight: 40,
-              padding: '8px 12px',
-              borderRadius: 10,
-              border: '1px solid var(--border)',
-              background: 'var(--surface)',
-              color: 'var(--text-hi)',
-              cursor: 'pointer',
-              margin: '6px 0',
-            }}
+            className="nav-menu-mobile-toggle"
           >
             {open ? <X size={18} /> : <Menu size={18} />}
-            <span style={{ fontSize: 14, fontWeight: 600 }}>Menu</span>
+            <span className="nav-menu-mobile-toggle-text">Menu</span>
           </button>
         )}
       </div>
 
       {isMobile && open ? (
-        <div
-          style={{
-            borderTop: '1px solid #e8e2d9',
-            padding: '10px 16px 14px',
-            background: '#ffffff',
-          }}
-        >
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxWidth: '1280px', margin: '0 auto' }}>
+        <div className="nav-menu-mobile-panel">
+          <div className="nav-menu-mobile-links">
             {filteredItems.map((item) => (
               <LinkItem key={item.path} item={item} mobile onClick={() => setOpen(false)} />
             ))}

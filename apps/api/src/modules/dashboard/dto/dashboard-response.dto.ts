@@ -18,7 +18,12 @@ export class DashboardResponseDto {
     net: string;
     ebitda_margin: string;
   };
-  variance_pct!: string;
+  variance_pct!: Array<{
+    line_label: string;
+    budgeted: number;
+    actual: number;
+    variance_pct: number;
+  }>;
   runway_weeks!: number;
   ca_trend!: Array<{
     period_label: string;

@@ -48,7 +48,7 @@ interface DashboardData {
     net: number | string;
     net_trend?: 'up' | 'down' | 'stable';
   };
-  variance_pct: VarianceItem[] | string;
+  variance_pct: VarianceItem[];
   runway_weeks: number;
   ca_trend: Array<{
     period_label: string;
@@ -88,7 +88,7 @@ export default function DashboardPage() {
     (a) => a.severity === 'CRITICAL'
   );
   const otherAlerts = alerts.filter((a) => a.severity !== 'CRITICAL');
-  const varianceRows = Array.isArray(variance_pct) ? variance_pct : [];
+  const varianceRows = variance_pct ?? [];
   const caTrendRows = ca_trend.map((point) => ({
     period_label: point.period_label,
     value: Number(point.value) || 0,

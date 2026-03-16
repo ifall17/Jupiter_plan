@@ -1,5 +1,5 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
-import { AlertSeverity, PeriodStatus, Prisma } from '@prisma/client';
+import { AlertSeverity, BudgetStatus, PeriodStatus, Prisma } from '@prisma/client';
 import { UserRole } from '@shared/enums';
 import { CACHE_TTL_KPI } from '../../common/constants/business.constants';
 import { PrismaService } from '../../prisma/prisma.service';
@@ -181,6 +181,60 @@ export class SnapshotsRepository {
     return variance.toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP).toString();
   }
 
+  async findVarianceByReferenceBudget(
+    orgId: string,
+    periodId: string,
+    fiscalYearId: string,
+  ): Promise<Array<{ line_label: string; budgeted: number; actual: number; variance_pct: number }>> {
+    const referenceBudget = await this.prisma.budget.findFirst({
+      where: {
+        org_id: orgId,
+        fiscal_year_id: fiscalYearId,
+        is_reference: true,
+        status: BudgetStatus.LOCKED,
+      },
+      include: {
+        budget_lines: {
+          where: { period_id: periodId },
+        },
+      },
+    });
+
+    if (!referenceBudget || referenceBudget.budget_lines.length === 0) {
+      return [];
+    }
+
+    const groups = new Map<string, { budgeted: Prisma.Decimal; actual: Prisma.Decimal }>();
+    for (const line of referenceBudget.budget_lines) {
+      const key = line.account_label;
+      const existing = groups.get(key) ?? {
+        budgeted: new Prisma.Decimal(0),
+        actual: new Prisma.Decimal(0),
+      };
+      groups.set(key, {
+        budgeted: existing.budgeted.plus(line.amount_budget),
+        actual: existing.actual.plus(line.amount_actual),
+      });
+    }
+
+    return Array.from(groups.entries()).map(([line_label, { budgeted, actual }]) => {
+      const variancePct = budgeted.eq(new Prisma.Decimal(0))
+        ? 0
+        : actual
+            .minus(budgeted)
+            .div(budgeted)
+            .mul(100)
+            .toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP)
+            .toNumber();
+      return {
+        line_label,
+        budgeted: budgeted.toNumber(),
+        actual: actual.toNumber(),
+        variance_pct: variancePct,
+      };
+    });
+  }
+
   async findRunwayWeeks(orgId: string): Promise<number> {
     const [plans, cash] = await this.prisma.$transaction([
       this.prisma.cashFlowPlan.findMany({
@@ -239,7 +293,7 @@ export class DashboardService {
       this.alertsRepository.countUnread(currentUser.org_id, period.id),
       this.alertsRepository.findUnreadTop5(currentUser.org_id, period.id),
       this.snapshotsRepository.findSummary(currentUser.org_id, period.id),
-      this.snapshotsRepository.findVariancePct(currentUser.org_id, period.id),
+      this.snapshotsRepository.findVarianceByReferenceBudget(currentUser.org_id, period.id, period.fiscal_year_id),
       this.snapshotsRepository.findRunwayWeeks(currentUser.org_id),
       this.kpisRepository.findRevenueTrend3(currentUser.org_id, period.fiscal_year_id),
     ]);

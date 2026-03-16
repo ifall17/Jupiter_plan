@@ -1,4 +1,4 @@
-import { IsString, IsUUID, MaxLength } from 'class-validator';
+import { IsOptional, IsString, IsUUID, MaxLength } from 'class-validator';
 
 export class CreateBudgetDto {
   @IsString()
@@ -7,4 +7,8 @@ export class CreateBudgetDto {
 
   @IsUUID()
   fiscal_year_id!: string;
+
+  @IsOptional()
+  @IsUUID()
+  parent_budget_id?: string;
 }

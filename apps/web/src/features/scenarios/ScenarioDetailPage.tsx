@@ -5,6 +5,7 @@ import { UserRole } from '@web/shared/enums';
 import apiClient, { unwrapApiData } from '../../api/client';
 import { useAuthStore } from '../../stores/auth.store';
 import { formatFCFA } from '../../utils/currency';
+import CommentSection from '../../components/comments/CommentSection';
 
 type ScenarioHypothesis = {
   id: string;
@@ -49,6 +50,13 @@ type Budget = {
 
 type PaginatedBudgets = { data: Budget[]; total: number; page: number; limit: number; totalPages: number };
 
+type HypothesisFormState = {
+  label: string;
+  parameter: string;
+  value: string;
+  unit: '%' | 'FCFA' | 'multiplier';
+};
+
 const STATUS_STYLE: Record<string, { bg: string; color: string }> = {
   DRAFT: { bg: 'var(--surface2)', color: 'var(--text-md)' },
   CALCULATING: { bg: 'var(--gold-lt)', color: 'var(--gold)' },
@@ -64,13 +72,16 @@ export default function ScenarioDetailPage() {
   const canEditHypothesis = role === UserRole.SUPER_ADMIN || role === UserRole.FPA;
 
   const [showHypothesisModal, setShowHypothesisModal] = useState(false);
-  const [hypothesisForm, setHypothesisForm] = useState({
+  const [editingHypothesisId, setEditingHypothesisId] = useState<string | null>(null);
+  const [lastHypothesisAction, setLastHypothesisAction] = useState<'create' | 'edit' | 'delete' | null>(null);
+  const [hypothesisForm, setHypothesisForm] = useState<HypothesisFormState>({
     label: '',
     parameter: 'revenue_growth',
     value: '',
     unit: '%',
   });
   const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
 
   const scenarioQuery = useQuery({
     queryKey: ['scenario', id],
@@ -100,8 +111,17 @@ export default function ScenarioDetailPage() {
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ['scenario', id] });
       setShowHypothesisModal(false);
+      setEditingHypothesisId(null);
       setHypothesisForm({ label: '', parameter: 'revenue_growth', value: '', unit: '%' });
       setError('');
+      setNotice(
+        lastHypothesisAction === 'delete'
+          ? 'Hypothèse supprimée.'
+          : lastHypothesisAction === 'edit'
+            ? 'Hypothèse mise à jour.'
+            : 'Hypothèse ajoutée.',
+      );
+      setLastHypothesisAction(null);
     },
     onError: (err: any) => setError(err.response?.data?.message ?? 'Erreur lors de l ajout de l hypothèse'),
   });
@@ -111,6 +131,14 @@ export default function ScenarioDetailPage() {
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ['scenario', id] });
     },
+    onError: (err: any) => {
+      const code = err.response?.data?.code;
+      if (code === 'SCENARIO_NOT_EDITABLE') {
+        setError('Le scénario doit être en brouillon (DRAFT) pour lancer le calcul.');
+        return;
+      }
+      setError(err.response?.data?.message ?? 'Erreur lors du calcul du scénario');
+    },
   });
 
   const saveMutation = useMutation({
@@ -118,6 +146,25 @@ export default function ScenarioDetailPage() {
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ['scenario', id] });
       await queryClient.invalidateQueries({ queryKey: ['scenarios'] });
+    },
+    onError: (err: any) => {
+      setError(err.response?.data?.message ?? 'Erreur lors de la sauvegarde du scénario');
+    },
+  });
+
+  const deleteScenarioMutation = useMutation({
+    mutationFn: async () => apiClient.delete(`/scenarios/${id}`).then(unwrapApiData),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['scenarios'] });
+      navigate('/scenarios');
+    },
+    onError: (err: any) => {
+      const code = err.response?.data?.code;
+      if (code === 'SCENARIO_LOCKED') {
+        setError('Ce scénario est verrouillé car référencé dans un rapport exporté.');
+        return;
+      }
+      setError(err.response?.data?.message ?? 'Erreur lors de la suppression du scénario');
     },
   });
 
@@ -147,6 +194,58 @@ export default function ScenarioDetailPage() {
   const statusStyle = STATUS_STYLE[scenario.status] ?? STATUS_STYLE.DRAFT;
   const hypotheses = scenario.hypotheses ?? [];
 
+  const toPayloadList = (list: Array<{ label: string; parameter: string; value: string; unit: string }>) => ({
+    hypotheses: list.map((item) => ({
+      label: item.label,
+      parameter: item.parameter,
+      value: item.value,
+      unit: item.unit,
+    })),
+  });
+
+  const openCreateHypothesisModal = () => {
+    setNotice('');
+    setEditingHypothesisId(null);
+    setHypothesisForm({ label: '', parameter: 'revenue_growth', value: '', unit: '%' });
+    setError('');
+    setShowHypothesisModal(true);
+  };
+
+  const openEditHypothesisModal = (hypothesis: ScenarioHypothesis) => {
+    setNotice('');
+    setEditingHypothesisId(hypothesis.id);
+    setHypothesisForm({
+      label: hypothesis.label,
+      parameter: hypothesis.parameter,
+      value: hypothesis.value,
+      unit: hypothesis.unit,
+    });
+    setError('');
+    setShowHypothesisModal(true);
+  };
+
+  const handleDeleteHypothesis = (hypothesisId: string) => {
+    const target = hypotheses.find((item) => item.id === hypothesisId);
+    const confirmed = window.confirm(`Supprimer l'hypothèse "${target?.label ?? ''}" ?`);
+    if (!confirmed) {
+      return;
+    }
+
+    setNotice('');
+    const nextList = hypotheses
+      .filter((item) => item.id !== hypothesisId)
+      .map((item) => ({
+        label: item.label,
+        parameter: item.parameter,
+        value: item.value,
+        unit: item.unit,
+      }));
+
+    setError('');
+    setLastHypothesisAction('delete');
+    upsertHypothesisMutation.mutate(toPayloadList(nextList));
+  };
+
   return (
     <div className="dashboard-page" style={{ display: 'grid', gap: 16 }}>
       <div className="page-head" style={{ alignItems: 'center' }}>
@@ -159,6 +258,32 @@ export default function ScenarioDetailPage() {
           <span style={{ padding: '4px 12px', borderRadius: 20, fontSize: 11, fontWeight: 700, background: statusStyle.bg, color: statusStyle.color }}>
             {scenario.status}
           </span>
+          {canEditHypothesis ? (
+            <button
+              onClick={() => {
+                const confirmed = window.confirm(`Supprimer le scénario "${scenario.name}" ? Cette action est irréversible.`);
+                if (!confirmed) {
+                  return;
+                }
+
+                setError('');
+                setNotice('');
+                deleteScenarioMutation.mutate();
+              }}
+              disabled={deleteScenarioMutation.isPending}
+              style={{
+                padding: '8px 14px',
+                borderRadius: 8,
+                border: '1px solid var(--terra)',
+                background: 'transparent',
+                color: 'var(--terra)',
+                cursor: 'pointer',
+                fontWeight: 600,
+              }}
+            >
+              {deleteScenarioMutation.isPending ? 'Suppression...' : 'Supprimer le scénario'}
+            </button>
+          ) : null}
           <button
             onClick={() => navigate('/scenarios')}
             style={{ padding: '8px 14px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--surface)', cursor: 'pointer' }}
@@ -173,10 +298,7 @@ export default function ScenarioDetailPage() {
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
             <h3 style={{ margin: 0, fontSize: 16, color: 'var(--text-hi)' }}>Hypothèses</h3>
             <button
-              onClick={() => {
-                setError('');
-                setShowHypothesisModal(true);
-              }}
+              onClick={openCreateHypothesisModal}
               style={{ padding: '8px 14px', borderRadius: 8, border: 'none', background: 'var(--terra)', color: '#fff', cursor: 'pointer', fontWeight: 600, fontSize: 12 }}
             >
               + Ajouter une hypothèse
@@ -188,14 +310,57 @@ export default function ScenarioDetailPage() {
           ) : (
             <div style={{ display: 'grid', gap: 8 }}>
               {hypotheses.map((hypothesis) => (
-                <div key={hypothesis.id} style={{ border: '1px solid var(--border)', borderRadius: 10, padding: '10px 12px', background: 'var(--surface2)', display: 'grid', gridTemplateColumns: '2fr 2fr 1fr', gap: 8 }}>
-                  <span style={{ fontSize: 13, fontWeight: 600 }}>{hypothesis.label}</span>
-                  <span style={{ fontSize: 12, color: 'var(--text-md)' }}>{hypothesis.parameter}</span>
-                  <span style={{ fontSize: 12, color: 'var(--text-hi)', textAlign: 'right' }}>{hypothesis.value} {hypothesis.unit}</span>
-                </div>
+                <details key={hypothesis.id} style={{ border: '1px solid var(--border)', borderRadius: 10, background: 'var(--surface2)' }}>
+                  <summary
+                    style={{
+                      listStyle: 'none',
+                      cursor: 'pointer',
+                      padding: '10px 12px',
+                      display: 'grid',
+                      gridTemplateColumns: '2fr 2fr 1fr auto',
+                      gap: 8,
+                      alignItems: 'center',
+                    }}
+                  >
+                    <span style={{ fontSize: 13, fontWeight: 600 }}>{hypothesis.label}</span>
+                    <span style={{ fontSize: 12, color: 'var(--text-md)' }}>{hypothesis.parameter}</span>
+                    <span style={{ fontSize: 12, color: 'var(--text-hi)', textAlign: 'right' }}>{hypothesis.value} {hypothesis.unit}</span>
+                    <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+                      <button
+                        onClick={(event) => {
+                          event.preventDefault();
+                          openEditHypothesisModal(hypothesis);
+                        }}
+                        style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--surface)', cursor: 'pointer', fontSize: 11, fontWeight: 600 }}
+                        disabled={upsertHypothesisMutation.isPending}
+                      >
+                        Éditer
+                      </button>
+                      <button
+                        onClick={(event) => {
+                          event.preventDefault();
+                          handleDeleteHypothesis(hypothesis.id);
+                        }}
+                        style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid var(--terra)', background: 'transparent', color: 'var(--terra)', cursor: 'pointer', fontSize: 11, fontWeight: 600 }}
+                        disabled={upsertHypothesisMutation.isPending}
+                      >
+                        Supprimer
+                      </button>
+                    </div>
+                  </summary>
+                  <div style={{ padding: '0 12px 12px' }}>
+                    <CommentSection
+                      entityType="HYPOTHESIS"
+                      entityId={hypothesis.id}
+                      title="Discussion"
+                    />
+                  </div>
+                </details>
               ))}
             </div>
           )}
+
+          {notice ? <p style={{ marginTop: 10, color: 'var(--kola)', fontSize: 12 }}>{notice}</p> : null}
         </section>
       ) : null}
 
@@ -203,19 +368,25 @@ export default function ScenarioDetailPage() {
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, flexWrap: 'wrap', gap: 10 }}>
           <h3 style={{ margin: 0, fontSize: 16, color: 'var(--text-hi)' }}>Calcul</h3>
           <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-            {(scenario.status === 'DRAFT' || scenario.status === 'CALCULATED') && canEditHypothesis ? (
+            {scenario.status === 'DRAFT' && canEditHypothesis ? (
               <button
-                onClick={() => calculateMutation.mutate()}
-                disabled={calculateMutation.isPending || scenario.status === 'CALCULATING'}
+                onClick={() => {
+                  setError('');
+                  calculateMutation.mutate();
+                }}
+                disabled={calculateMutation.isPending}
                 style={{ padding: '8px 14px', borderRadius: 8, border: 'none', background: 'var(--indigo)', color: '#fff', cursor: 'pointer', fontWeight: 600, fontSize: 12 }}
               >
-                {scenario.status === 'CALCULATING' || calculateMutation.isPending ? 'Calcul en cours...' : 'Calculer'}
+                {calculateMutation.isPending ? 'Calcul en cours...' : 'Calculer'}
               </button>
             ) : null}
 
             {scenario.status === 'CALCULATED' && canEditHypothesis ? (
               <button
-                onClick={() => saveMutation.mutate()}
+                onClick={() => {
+                  setError('');
+                  saveMutation.mutate();
+                }}
                 disabled={saveMutation.isPending}
                 style={{ padding: '8px 14px', borderRadius: 8, border: 'none', background: 'var(--kola)', color: '#fff', cursor: 'pointer', fontWeight: 600, fontSize: 12 }}
               >
@@ -224,6 +395,8 @@ export default function ScenarioDetailPage() {
             ) : null}
           </div>
         </div>
+
+        {error ? <p style={{ marginBottom: 12, color: 'var(--terra)', fontSize: 12 }}>{error}</p> : null}
 
         {scenario.status === 'CALCULATING' ? (
           <p style={{ fontSize: 13, color: 'var(--text-md)', margin: 0 }}>Calcul en cours... actualisation automatique.</p>
@@ -266,7 +439,9 @@ export default function ScenarioDetailPage() {
             onClick={(event) => event.stopPropagation()}
             style={{ width: 'min(100%, 560px)', borderRadius: 14, border: '1px solid var(--border)', background: 'var(--surface)', boxShadow: 'var(--shadow-md)', padding: 20 }}
           >
-            <h3 style={{ marginTop: 0, marginBottom: 12 }}>Ajouter une hypothèse</h3>
+            <h3 style={{ marginTop: 0, marginBottom: 12 }}>
+              {editingHypothesisId ? 'Éditer une hypothèse' : 'Ajouter une hypothèse'}
+            </h3>
             <div style={{ display: 'grid', gap: 10 }}>
               <input
                 placeholder="Label"
@@ -292,7 +467,7 @@ export default function ScenarioDetailPage() {
                 />
                 <select
                   value={hypothesisForm.unit}
-                  onChange={(event) => setHypothesisForm({ ...hypothesisForm, unit: event.target.value })}
+                  onChange={(event) => setHypothesisForm({ ...hypothesisForm, unit: event.target.value as HypothesisFormState['unit'] })}
                   style={{ width: '100%', borderRadius: 8, border: '1px solid var(--border)', padding: '10px 12px', fontSize: 13 }}
                 >
                   <option value="%">%</option>
@@ -326,28 +501,51 @@ export default function ScenarioDetailPage() {
                     unit: item.unit,
                   }));
 
-                  const newList = [
-                    ...existing,
-                    {
-                      label: hypothesisForm.label.trim(),
-                      parameter: hypothesisForm.parameter,
-                      value: hypothesisForm.value.trim(),
-                      unit: hypothesisForm.unit,
-                    },
-                  ];
+                  const newItem = {
+                    label: hypothesisForm.label.trim(),
+                    parameter: hypothesisForm.parameter,
+                    value: hypothesisForm.value.trim(),
+                    unit: hypothesisForm.unit,
+                  };
+
+                  const newList = editingHypothesisId
+                    ? hypotheses.map((item) =>
+                        item.id === editingHypothesisId
+                          ? newItem
+                          : {
+                              label: item.label,
+                              parameter: item.parameter,
+                              value: item.value,
+                              unit: item.unit,
+                            },
+                      )
+                    : [...existing, newItem];
 
                   setError('');
-                  upsertHypothesisMutation.mutate({ hypotheses: newList });
+                  setLastHypothesisAction(editingHypothesisId ? 'edit' : 'create');
+                  upsertHypothesisMutation.mutate(toPayloadList(newList));
                 }}
                 style={{ padding: '8px 14px', borderRadius: 8, border: 'none', background: 'var(--terra)', color: '#fff', cursor: 'pointer', fontWeight: 600 }}
                 disabled={upsertHypothesisMutation.isPending}
               >
-                {upsertHypothesisMutation.isPending ? 'Ajout...' : 'Ajouter'}
+                {upsertHypothesisMutation.isPending
+                  ? editingHypothesisId
+                    ? 'Mise à jour...'
+                    : 'Ajout...'
+                  : editingHypothesisId
+                  ? 'Mettre à jour'
+                  : 'Ajouter'}
               </button>
             </div>
           </div>
         </div>
       ) : null}
+
+      <CommentSection
+        entityType="SCENARIO"
+        entityId={scenario.id}
+        title="Commentaires sur ce scénario"
+      />
     </div>
   );
 }

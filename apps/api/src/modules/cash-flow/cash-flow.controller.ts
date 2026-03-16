@@ -1,7 +1,9 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
+  Param,
   Post,
   Query,
   Req,
@@ -17,15 +19,23 @@ import { UserRole } from '@shared/enums';
 import { CashFlowService, CashFlowCurrentUser } from './cash-flow.service';
 import { CreateCashFlowPlanDto } from './dto/create-cash-flow-plan.dto';
 import { CashFlowResponseDto } from './dto/cash-flow-response.dto';
+import { CreateCashFlowEntryDto } from './dto/create-cash-flow-entry.dto';
 
-@Controller('cashflow')
+@Controller(['cashflow', 'cash-flow'])
 export class CashFlowController {
   constructor(private readonly cashFlowService: CashFlowService) {}
 
   @Get()
+  @Roles(UserRole.SUPER_ADMIN, UserRole.FPA, UserRole.LECTEUR)
+  @UseGuards(JwtAuthGuard, RolesGuard, OrgGuard)
+  async getCashFlow(@Req() req: Request) {
+    return this.cashFlowService.getRollingPlan(this.getCurrentUser(req).org_id);
+  }
+
+  @Get('entries')
   @Roles(UserRole.SUPER_ADMIN, UserRole.FPA)
   @UseGuards(JwtAuthGuard, RolesGuard, OrgGuard)
-  async list(
+  async listEntries(
     @Req() req: Request,
     @Query('fiscal_year_id') fiscalYearId?: string,
     @Query('period_id') periodId?: string,
@@ -42,6 +52,27 @@ export class CashFlowController {
   @UseGuards(JwtAuthGuard, RolesGuard, OrgGuard)
   async createOrUpdate(@Req() req: Request, @Body() dto: CreateCashFlowPlanDto): Promise<CashFlowResponseDto> {
     return this.cashFlowService.createOrUpdatePlan(this.getCurrentUser(req), dto);
+  }
+
+  @Get('plans')
+  @Roles(UserRole.SUPER_ADMIN, UserRole.FPA, UserRole.LECTEUR)
+  @UseGuards(JwtAuthGuard, RolesGuard, OrgGuard)
+  async listPlans(@Req() req: Request): Promise<CashFlowResponseDto[]> {
+    return this.cashFlowService.listPlans(this.getCurrentUser(req));
+  }
+
+  @Post('plans')
+  @Roles(UserRole.SUPER_ADMIN, UserRole.FPA)
+  @UseGuards(JwtAuthGuard, RolesGuard, OrgGuard)
+  async createPlanEntry(@Req() req: Request, @Body() dto: CreateCashFlowEntryDto): Promise<CashFlowResponseDto> {
+    return this.cashFlowService.createPlannedEntry(this.getCurrentUser(req), dto);
+  }
+
+  @Delete('plans/:id')
+  @Roles(UserRole.SUPER_ADMIN, UserRole.FPA)
+  @UseGuards(JwtAuthGuard, RolesGuard, OrgGuard)
+  async deletePlan(@Req() req: Request, @Param('id') id: string): Promise<{ success: true }> {
+    return this.cashFlowService.deletePlan(id, this.getCurrentUser(req).org_id);
   }
 
   @Get('runway')

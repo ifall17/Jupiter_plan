@@ -31,7 +31,7 @@ export class BankAccountsController {
   }
 
   @Post()
-  @Roles(UserRole.SUPER_ADMIN)
+  @Roles(UserRole.SUPER_ADMIN, UserRole.FPA)
   @UseGuards(JwtAuthGuard, RolesGuard, OrgGuard)
   async create(@Req() req: Request, @Body() dto: CreateBankAccountDto): Promise<BankAccountResponseDto> {
     return this.bankAccountsService.create(this.getCurrentUser(req), dto);

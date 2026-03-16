@@ -1,4 +1,4 @@
-import { Controller, Get, Query, Req, UnauthorizedException, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Post, Query, Req, UnauthorizedException, UseGuards } from '@nestjs/common';
 import { Request } from 'express';
 import { UserRole } from '@shared/enums';
 import { Roles } from '../../common/decorators/roles.decorator';
@@ -29,6 +29,19 @@ export class KpisController {
     @Query('scenario_id') scenarioId?: string,
   ): Promise<KpiValueResponseDto[]> {
     return this.kpisService.getValues(this.getCurrentUser(req), periodId, scenarioId);
+  }
+
+  @Post('calculate')
+  @Roles(UserRole.SUPER_ADMIN, UserRole.FPA)
+  @UseGuards(JwtAuthGuard, RolesGuard, OrgGuard)
+  async calculate(
+    @Req() req: Request,
+    @Body('period_id') periodId: string,
+  ): Promise<{ calculated: number; kpis: string[] }> {
+    return this.kpisService.calculateForPeriod(
+      this.getCurrentUser(req).org_id,
+      periodId,
+    );
   }
 
   @Get('trend')

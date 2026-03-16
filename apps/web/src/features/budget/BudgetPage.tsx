@@ -1,4 +1,4 @@
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useOrgStore } from '../../stores/org.store';
@@ -23,6 +23,8 @@ type Budget = {
   status: string;
   version: number;
   fiscal_year_id: string;
+  parent_budget_id: string | null;
+  is_reference: boolean;
   submitted_at: string | null;
   approved_at: string | null;
   locked_at: string | null;
@@ -62,7 +64,7 @@ export default function BudgetPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [showCreateModal, setShowCreateModal] = useState(false);
-  const [form, setForm] = useState({ name: '', fiscal_year_id: '' });
+  const [form, setForm] = useState({ name: '', fiscal_year_id: '', parent_budget_id: '' });
   const [isCreating, setIsCreating] = useState(false);
   const [error, setError] = useState('');
 
@@ -85,6 +87,15 @@ export default function BudgetPage() {
     fiscalYearsQuery.data ??
     (fiscalYearId ? [{ id: fiscalYearId, label: 'Exercice courant' }] : []);
 
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+
+  const setReference = useMutation({
+    mutationFn: (id: string) => apiClient.post(`/budgets/${id}/set-reference`),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['budgets'] });
+    },
+  });
+
   const totalBudget = budgets.reduce(
     (sum, b) => sum + b.lines.reduce((ls, l) => ls + (Number(l.amount_budget) || 0), 0),
     0,
@@ -106,11 +117,12 @@ export default function BudgetPage() {
       const res = await apiClient.post<Budget>('/budgets', {
         name: form.name.trim(),
         fiscal_year_id: form.fiscal_year_id,
+        parent_budget_id: form.parent_budget_id || undefined,
       });
       void queryClient.invalidateQueries({ queryKey: ['budgets'] });
       const created = unwrapApiData(res);
       setShowCreateModal(false);
-      setForm({ name: '', fiscal_year_id: '' });
+      setForm({ name: '', fiscal_year_id: '', parent_budget_id: '' });
       navigate(`/budget/${created.id}`);
     } catch (err: any) {
       setError(err.response?.data?.message ?? 'Erreur lors de la creation');
@@ -118,6 +130,33 @@ export default function BudgetPage() {
       setIsCreating(false);
     }
   }
+
+  async function handleDeleteBudget(budget: Budget) {
+    if (!window.confirm(`Supprimer le budget \"${budget.name}\" ?`)) {
+      return;
+    }
+
+    setDeletingId(budget.id);
+    try {
+      await apiClient.delete(`/budgets/${budget.id}`);
+      await queryClient.invalidateQueries({ queryKey: ['budgets'] });
+    } catch (err: any) {
+      const message = err.response?.data?.message ?? 'Suppression impossible';
+      window.alert(Array.isArray(message) ? message.join(', ') : message);
+    } finally {
+      setDeletingId(null);
+    }
+  }
+
+  function handleSetReference(id: string) {
+    if (window.confirm('Definir ce budget comme reference pour cet exercice ?\nL ancien budget de reference perdra ce statut.')) {
+      setReference.mutate(id);
+    }
+  }
+
+  const lockedBudgetsForFiscalYear = budgets.filter(
+    (b) => b.status === 'LOCKED' && b.fiscal_year_id === form.fiscal_year_id,
+  );
 
   return (
     <div className="dashboard-page">
@@ -181,12 +220,15 @@ export default function BudgetPage() {
                   <tr style={{ borderBottom: '1px solid var(--border)', background: 'var(--surface2)' }}>
                     <th style={TH}>Nom</th>
                     <th style={TH}>Statut</th>
+                    <th style={TH}>Reference</th>
+                    <th style={TH}>Reforecast de</th>
                     <th style={{ ...TH, textAlign: 'center' }}>Ver.</th>
                     <th style={{ ...TH, textAlign: 'right' }}>Lignes</th>
                     <th style={{ ...TH, textAlign: 'right' }}>Total budgété</th>
                     <th style={TH}>Créé le</th>
                     <th style={TH}>Soumis le</th>
                     <th style={TH}>Approuvé le</th>
+                    <th style={{ ...TH, textAlign: 'right' }}>Actions</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -208,14 +250,84 @@ export default function BudgetPage() {
                           e.currentTarget.style.background = 'transparent';
                         }}
                       >
-                        <td style={TD}><span style={{ fontWeight: 600 }}>{b.name}</span></td>
+                        <td style={TD}>
+                          <span style={{ fontWeight: 600 }}>{b.name}</span>
+                          {b.is_reference && (
+                            <span
+                              style={{
+                                padding: '2px 8px',
+                                borderRadius: 20,
+                                fontSize: 10,
+                                fontWeight: 700,
+                                background: 'var(--gold-lt)',
+                                color: 'var(--gold)',
+                                marginLeft: 8,
+                              }}
+                            >
+                              ⭐ Reference
+                            </span>
+                          )}
+                        </td>
                         <td style={TD}><Badge val={b.status} /></td>
+                        <td style={{ ...TD, color: 'var(--text-md)' }}>{b.is_reference ? '⭐' : '—'}</td>
+                        <td style={{ ...TD, color: 'var(--text-md)' }}>{b.parent_budget_id ? '↩ Reforecast' : '—'}</td>
                         <td style={{ ...TD, textAlign: 'center', color: 'var(--text-md)' }}>v{b.version}</td>
                         <td style={{ ...TD, textAlign: 'right', color: 'var(--text-md)' }}>{b.lines.length}</td>
                         <td style={{ ...TD, textAlign: 'right', fontWeight: 600 }}>{formatFCFA(totalLine)}</td>
                         <td style={{ ...TD, color: 'var(--text-md)' }}>{formatDate(b.created_at, 'short')}</td>
                         <td style={{ ...TD, color: 'var(--text-md)' }}>{b.submitted_at ? formatDate(b.submitted_at, 'short') : '—'}</td>
                         <td style={{ ...TD, color: 'var(--text-md)' }}>{b.approved_at ? formatDate(b.approved_at, 'short') : '—'}</td>
+                        <td style={{ ...TD, textAlign: 'right' }}>
+                          {b.status === 'LOCKED' ? (
+                            <>
+                              {!b.is_reference && (
+                                <button
+                                  type="button"
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    handleSetReference(b.id);
+                                  }}
+                                  style={{
+                                    padding: '5px 12px',
+                                    background: 'transparent',
+                                    border: '1px solid var(--gold)',
+                                    borderRadius: 6,
+                                    cursor: 'pointer',
+                                    fontSize: 12,
+                                    fontWeight: 600,
+                                    color: 'var(--gold)',
+                                    marginRight: 8,
+                                  }}
+                                >
+                                  ⭐ Definir reference
+                                </button>
+                              )}
+                              <span style={{ fontSize: 12, color: 'var(--text-md)', fontWeight: 600 }}>🔒 Protege</span>
+                            </>
+                          ) : (
+                            <button
+                              type="button"
+                              disabled={deletingId === b.id || b.status === 'APPROVED'}
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                void handleDeleteBudget(b);
+                              }}
+                              style={{
+                                padding: '6px 10px',
+                                background: 'transparent',
+                                border: '1px solid var(--border)',
+                                borderRadius: 8,
+                                color: 'var(--terra)',
+                                cursor: deletingId === b.id || b.status === 'APPROVED' ? 'not-allowed' : 'pointer',
+                                fontSize: 12,
+                                fontWeight: 600,
+                              }}
+                              title={b.status === 'APPROVED' ? 'Suppression interdite pour ce statut' : 'Supprimer ce budget'}
+                            >
+                              {deletingId === b.id ? 'Suppression...' : 'Supprimer'}
+                            </button>
+                          )}
+                        </td>
                       </tr>
                     );
                   })}
@@ -313,13 +425,47 @@ export default function BudgetPage() {
               </select>
             </div>
 
+            <div style={{ marginBottom: 24 }}>
+              <label
+                style={{
+                  fontSize: 12,
+                  fontWeight: 600,
+                  color: 'var(--text-md)',
+                  display: 'block',
+                  marginBottom: 6,
+                }}
+              >
+                Ce budget est un reforecast de :
+              </label>
+              <select
+                value={form.parent_budget_id}
+                onChange={(e) => setForm({ ...form, parent_budget_id: e.target.value })}
+                style={{
+                  width: '100%',
+                  padding: '10px 14px',
+                  border: '1px solid var(--border)',
+                  borderRadius: 8,
+                  fontSize: 13,
+                  background: 'var(--surface)',
+                  fontFamily: 'var(--font-body)',
+                }}
+              >
+                <option value="">Aucun (budget initial)</option>
+                {lockedBudgetsForFiscalYear.map((lockedBudget) => (
+                  <option key={lockedBudget.id} value={lockedBudget.id}>
+                    {lockedBudget.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+
             {error && <p style={{ color: 'var(--terra)', fontSize: 12, marginBottom: 16 }}>{error}</p>}
 
             <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
               <button
                 onClick={() => {
                   setShowCreateModal(false);
-                  setForm({ name: '', fiscal_year_id: '' });
+                  setForm({ name: '', fiscal_year_id: '', parent_budget_id: '' });
                   setError('');
                 }}
                 style={{

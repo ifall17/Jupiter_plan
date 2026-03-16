@@ -22,6 +22,8 @@ type Budget = {
   status: 'DRAFT' | 'SUBMITTED' | 'APPROVED' | 'REJECTED' | 'LOCKED' | string;
   version: number;
   fiscal_year_id: string;
+  is_reference?: boolean;
+  parent_budget_id?: string | null;
   lines: BudgetLine[];
 };
 
@@ -339,6 +341,22 @@ export default function BudgetDetailPage() {
           BUDGET
         </p>
         <h1 style={{ fontFamily: 'var(--font-serif)', fontSize: 28, color: 'var(--ink)' }}>{budget.name}</h1>
+        {budget.is_reference ? (
+          <p
+            style={{
+              display: 'inline-block',
+              marginTop: 8,
+              padding: '4px 10px',
+              borderRadius: 20,
+              fontSize: 11,
+              fontWeight: 700,
+              background: 'var(--gold-lt)',
+              color: 'var(--gold)',
+            }}
+          >
+            ⭐ Budget de reference
+          </p>
+        ) : null}
         <p style={{ fontSize: 13, color: 'var(--text-md)', marginTop: 5 }}>
           Statut : <strong>{budget.status}</strong>
           {' · '}Version : <strong>{budget.version}</strong>

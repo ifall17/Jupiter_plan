@@ -25,7 +25,7 @@ export default function VarianceTable({ variance_pct }: VarianceTableProps) {
           fontSize: '13px',
         }}
       >
-        Variance Budget vs Réalisé indisponible pour cette période.
+        Variance vs Budget de référence indisponible pour cette période.
       </div>
     );
   }
@@ -49,7 +49,7 @@ export default function VarianceTable({ variance_pct }: VarianceTableProps) {
           color: 'var(--text-hi)',
         }}
       >
-        Variance Budget vs Réalisé
+        Variance vs Budget de référence
       </h3>
       <div
         style={{

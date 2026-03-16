@@ -20,9 +20,11 @@ export type RepoBudget = {
   id: string;
   org_id: string;
   fiscal_year_id: string;
+  parent_budget_id: string | null;
   name: string;
   version: number;
   status: BudgetStatus;
+  is_reference: boolean;
   submitted_at: Date | null;
   submitted_by: string | null;
   approved_at: Date | null;
@@ -65,9 +67,11 @@ export class BudgetsRepository extends BaseRepository<RepoBudget> {
       data: {
         org_id: data.org_id ?? '',
         fiscal_year_id: data.fiscal_year_id ?? '',
+        parent_budget_id: data.parent_budget_id ?? null,
         name: data.name ?? '',
         version: data.version ?? 1,
         status: data.status ?? BudgetStatus.DRAFT,
+        is_reference: data.is_reference ?? false,
       },
       include: { budget_lines: true },
     });
@@ -79,8 +83,10 @@ export class BudgetsRepository extends BaseRepository<RepoBudget> {
     await this.prisma.budget.updateMany({
       where: { id, org_id: orgId },
       data: {
+        parent_budget_id: data.parent_budget_id,
         name: data.name,
         status: data.status,
+        is_reference: data.is_reference,
         submitted_at: data.submitted_at,
         submitted_by: data.submitted_by,
         approved_at: data.approved_at,
@@ -97,6 +103,13 @@ export class BudgetsRepository extends BaseRepository<RepoBudget> {
     }
 
     return updated;
+  }
+
+  async updateMany(
+    where: Prisma.BudgetWhereInput,
+    data: Prisma.BudgetUpdateManyMutationInput,
+  ): Promise<void> {
+    await this.prisma.budget.updateMany({ where, data });
   }
 
   async softDelete(_id: string, _orgId: string): Promise<void> {
@@ -220,6 +233,24 @@ export class BudgetsRepository extends BaseRepository<RepoBudget> {
     await this.prisma.budget.updateMany({
       where: { id: budgetId, org_id: orgId },
       data,
+    });
+  }
+
+  async deleteBudget(budgetId: string, orgId: string): Promise<void> {
+    await this.prisma.$transaction(async (tx) => {
+      await tx.budgetLine.deleteMany({
+        where: {
+          budget_id: budgetId,
+          org_id: orgId,
+        },
+      });
+
+      await tx.budget.deleteMany({
+        where: {
+          id: budgetId,
+          org_id: orgId,
+        },
+      });
     });
   }
 

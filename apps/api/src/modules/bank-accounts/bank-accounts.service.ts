@@ -22,7 +22,7 @@ export class BankAccountsService {
 
   async listActive(currentUser: BankAccountCurrentUser): Promise<BankAccountResponseDto[]> {
     const rows = await this.prisma.bankAccount.findMany({
-      where: { org_id: currentUser.org_id, is_active: true },
+      where: { org_id: currentUser.org_id },
       orderBy: { created_at: 'desc' },
     });
 
@@ -30,12 +30,25 @@ export class BankAccountsService {
   }
 
   async create(currentUser: BankAccountCurrentUser, dto: CreateBankAccountDto): Promise<BankAccountResponseDto> {
+    const resolvedName =
+      dto.name?.trim() ||
+      [dto.bank_name?.trim(), dto.account_name?.trim()].filter(Boolean).join(' - ');
+
+    if (!resolvedName) {
+      throw new BadRequestException({ code: 'INVALID_NAME', message: 'name is required' });
+    }
+
+    const resolvedBalance = dto.balance ?? dto.current_balance ?? '0';
+
     const row = await this.prisma.bankAccount.create({
       data: {
         org_id: currentUser.org_id,
-        name: dto.name.trim(),
-        account_type: dto.account_type as AccountType,
-        balance: new Prisma.Decimal(dto.balance),
+        name: resolvedName,
+        bank_name: dto.bank_name?.trim() || null,
+        account_name: dto.account_name?.trim() || null,
+        account_number: dto.account_number?.trim() || null,
+        account_type: (dto.account_type as AccountType) ?? AccountType.BANK,
+        balance: new Prisma.Decimal(resolvedBalance),
         currency: dto.currency?.trim() || 'XOF',
       },
     });
@@ -87,6 +100,9 @@ export class BankAccountsService {
   private toResponse(row: {
     id: string;
     name: string;
+    bank_name: string | null;
+    account_name: string | null;
+    account_number: string | null;
     account_type: AccountType;
     balance: Prisma.Decimal;
     currency: string;
@@ -95,8 +111,12 @@ export class BankAccountsService {
     return {
       id: row.id,
       name: row.name,
+      bank_name: row.bank_name,
+      account_name: row.account_name,
+      account_number: row.account_number,
       account_type: row.account_type,
       balance: row.balance.toString(),
+      current_balance: row.balance.toString(),
       currency: row.currency,
       is_active: row.is_active,
     };

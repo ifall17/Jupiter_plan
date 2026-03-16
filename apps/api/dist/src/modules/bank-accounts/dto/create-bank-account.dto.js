@@ -16,18 +16,44 @@ class CreateBankAccountDto {
 }
 exports.CreateBankAccountDto = CreateBankAccountDto;
 __decorate([
+    (0, class_validator_1.IsOptional)(),
     (0, class_validator_1.IsString)(),
     (0, class_validator_1.MaxLength)(120),
     __metadata("design:type", String)
 ], CreateBankAccountDto.prototype, "name", void 0);
 __decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    (0, class_validator_1.MaxLength)(120),
+    __metadata("design:type", String)
+], CreateBankAccountDto.prototype, "bank_name", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    (0, class_validator_1.MaxLength)(120),
+    __metadata("design:type", String)
+], CreateBankAccountDto.prototype, "account_name", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    (0, class_validator_1.MaxLength)(50),
+    __metadata("design:type", String)
+], CreateBankAccountDto.prototype, "account_number", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
     (0, class_validator_1.IsEnum)(client_1.AccountType),
     __metadata("design:type", String)
 ], CreateBankAccountDto.prototype, "account_type", void 0);
 __decorate([
+    (0, class_validator_1.IsOptional)(),
     (0, class_validator_1.IsDecimal)(),
     __metadata("design:type", String)
 ], CreateBankAccountDto.prototype, "balance", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsDecimal)(),
+    __metadata("design:type", String)
+], CreateBankAccountDto.prototype, "current_balance", void 0);
 __decorate([
     (0, class_validator_1.IsString)(),
     (0, class_validator_1.IsOptional)(),

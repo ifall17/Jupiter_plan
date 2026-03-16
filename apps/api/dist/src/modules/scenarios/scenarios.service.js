@@ -92,16 +92,33 @@ let ScenariosService = class ScenariosService {
         if (scenario.status !== client_1.ScenarioStatus.DRAFT) {
             throw new common_1.BadRequestException({ code: 'SCENARIO_NOT_EDITABLE' });
         }
-        await this.calcQueue.add('scenario-calculate', {
-            scenario_id: scenario.id,
-            org_id: currentUser.org_id,
-            budget_id: scenario.budget_id,
+        await this.scenariosRepository.updateStatus(scenario.id, currentUser.org_id, client_1.ScenarioStatus.DRAFT);
+        const snapshot = await this.scenariosRepository.calculateSnapshotFromBudget({
+            scenarioId: scenario.id,
+            orgId: currentUser.org_id,
+            budgetId: scenario.budget_id,
             hypotheses: scenario.hypotheses.map((h) => ({
                 parameter: h.parameter,
                 value: h.value.toString(),
                 unit: h.unit,
             })),
-        }, { removeOnComplete: 100, removeOnFail: 100 });
+        });
+        await this.scenariosRepository.upsertScenarioSnapshot({
+            scenarioId: scenario.id,
+            orgId: currentUser.org_id,
+            periodId: snapshot.period_id,
+            is_revenue: snapshot.is_revenue,
+            is_expenses: snapshot.is_expenses,
+            is_ebitda: snapshot.is_ebitda,
+            is_net: snapshot.is_net,
+            bs_assets: snapshot.bs_assets,
+            bs_liabilities: snapshot.bs_liabilities,
+            bs_equity: snapshot.bs_equity,
+            cf_operating: snapshot.cf_operating,
+            cf_investing: snapshot.cf_investing,
+            cf_financing: snapshot.cf_financing,
+        });
+        await this.scenariosRepository.updateStatus(scenario.id, currentUser.org_id, client_1.ScenarioStatus.CALCULATED);
         return { scenario_id: scenario.id, status: 'PROCESSING' };
     }
     async saveScenario(currentUser, scenarioId, ipAddress) {

@@ -42,9 +42,11 @@ let BudgetsRepository = class BudgetsRepository extends base_repository_1.BaseRe
             data: {
                 org_id: data.org_id ?? '',
                 fiscal_year_id: data.fiscal_year_id ?? '',
+                parent_budget_id: data.parent_budget_id ?? null,
                 name: data.name ?? '',
                 version: data.version ?? 1,
                 status: data.status ?? client_1.BudgetStatus.DRAFT,
+                is_reference: data.is_reference ?? false,
             },
             include: { budget_lines: true },
         });
@@ -54,8 +56,10 @@ let BudgetsRepository = class BudgetsRepository extends base_repository_1.BaseRe
         await this.prisma.budget.updateMany({
             where: { id, org_id: orgId },
             data: {
+                parent_budget_id: data.parent_budget_id,
                 name: data.name,
                 status: data.status,
+                is_reference: data.is_reference,
                 submitted_at: data.submitted_at,
                 submitted_by: data.submitted_by,
                 approved_at: data.approved_at,
@@ -70,6 +74,9 @@ let BudgetsRepository = class BudgetsRepository extends base_repository_1.BaseRe
             throw new Error('BUDGET_NOT_FOUND');
         }
         return updated;
+    }
+    async updateMany(where, data) {
+        await this.prisma.budget.updateMany({ where, data });
     }
     async softDelete(_id, _orgId) {
         throw new Error('NOT_SUPPORTED');
@@ -157,6 +164,22 @@ let BudgetsRepository = class BudgetsRepository extends base_repository_1.BaseRe
         await this.prisma.budget.updateMany({
             where: { id: budgetId, org_id: orgId },
             data,
+        });
+    }
+    async deleteBudget(budgetId, orgId) {
+        await this.prisma.$transaction(async (tx) => {
+            await tx.budgetLine.deleteMany({
+                where: {
+                    budget_id: budgetId,
+                    org_id: orgId,
+                },
+            });
+            await tx.budget.deleteMany({
+                where: {
+                    id: budgetId,
+                    org_id: orgId,
+                },
+            });
         });
     }
     async getContributorDepartments(userId) {

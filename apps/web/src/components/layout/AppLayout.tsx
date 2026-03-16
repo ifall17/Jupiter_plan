@@ -84,20 +84,14 @@ export default function AppLayout(): JSX.Element {
   }, [toast]);
 
   return (
-    <div className="min-h-screen" style={{ background: '#faf8f4' }}>
+    <div className="min-h-screen app-layout-root">
       <Topbar />
       <NavMenu />
       <main className="max-w-7xl mx-auto px-6 py-8">
         <Outlet />
       </main>
       {toast ? (
-        <div
-          className="fixed right-6 bottom-6 px-4 py-3 rounded-md shadow"
-          style={{
-            background: toast.severity === 'CRITICAL' ? '#c0303f' : toast.severity === 'WARN' ? '#b8963e' : '#3d5a99',
-            color: '#fff',
-          }}
-        >
+        <div className={`fixed right-6 bottom-6 px-4 py-3 rounded-md shadow app-layout-toast app-layout-toast-${toast.severity.toLowerCase()}`}>
           {toast.message}
         </div>
       ) : null}

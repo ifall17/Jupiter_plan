@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   HttpCode,
   Param,
@@ -65,6 +66,14 @@ export class BudgetsController {
     return this.budgetsService.createBudget(this.getCurrentUser(req), dto, this.extractIp(req));
   }
 
+  @Delete(':id')
+  @HttpCode(200)
+  @Roles(UserRole.SUPER_ADMIN, UserRole.FPA)
+  @UseGuards(JwtAuthGuard, RolesGuard, OrgGuard)
+  async remove(@Req() req: Request, @Param('id') id: string): Promise<{ success: true }> {
+    return this.budgetsService.deleteBudget(this.getCurrentUser(req), id);
+  }
+
   @Put(':id/lines')
   @Roles(UserRole.SUPER_ADMIN, UserRole.FPA, UserRole.CONTRIBUTEUR)
   @UseGuards(JwtAuthGuard, RolesGuard, OrgGuard, DeptGuard)
@@ -114,6 +123,14 @@ export class BudgetsController {
   @UseGuards(JwtAuthGuard, RolesGuard, OrgGuard)
   async lock(@Req() req: Request, @Param('id') id: string): Promise<BudgetResponseDto> {
     return this.budgetsService.lockBudget(this.getCurrentUser(req), id, this.extractIp(req));
+  }
+
+  @Post(':id/set-reference')
+  @HttpCode(200)
+  @Roles(UserRole.SUPER_ADMIN, UserRole.FPA)
+  @UseGuards(JwtAuthGuard, RolesGuard, OrgGuard)
+  async setAsReference(@Req() req: Request, @Param('id') id: string): Promise<BudgetResponseDto> {
+    return this.budgetsService.setAsReference(this.getCurrentUser(req), id);
   }
 
   @Get(':id/variance')

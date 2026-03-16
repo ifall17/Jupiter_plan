@@ -21,11 +21,15 @@ const org_guard_1 = require("../../common/guards/org.guard");
 const enums_1 = require("../../shared/enums");
 const cash_flow_service_1 = require("./cash-flow.service");
 const create_cash_flow_plan_dto_1 = require("./dto/create-cash-flow-plan.dto");
+const create_cash_flow_entry_dto_1 = require("./dto/create-cash-flow-entry.dto");
 let CashFlowController = class CashFlowController {
     constructor(cashFlowService) {
         this.cashFlowService = cashFlowService;
     }
-    async list(req, fiscalYearId, periodId) {
+    async getCashFlow(req) {
+        return this.cashFlowService.getRollingPlan(this.getCurrentUser(req).org_id);
+    }
+    async listEntries(req, fiscalYearId, periodId) {
         return this.cashFlowService.listRollingPlan({
             currentUser: this.getCurrentUser(req),
             fiscal_year_id: fiscalYearId,
@@ -34,6 +38,15 @@ let CashFlowController = class CashFlowController {
     }
     async createOrUpdate(req, dto) {
         return this.cashFlowService.createOrUpdatePlan(this.getCurrentUser(req), dto);
+    }
+    async listPlans(req) {
+        return this.cashFlowService.listPlans(this.getCurrentUser(req));
+    }
+    async createPlanEntry(req, dto) {
+        return this.cashFlowService.createPlannedEntry(this.getCurrentUser(req), dto);
+    }
+    async deletePlan(req, id) {
+        return this.cashFlowService.deletePlan(id, this.getCurrentUser(req).org_id);
     }
     async runway(req) {
         return this.cashFlowService.getRunwayStatus(this.getCurrentUser(req));
@@ -49,6 +62,15 @@ let CashFlowController = class CashFlowController {
 exports.CashFlowController = CashFlowController;
 __decorate([
     (0, common_1.Get)(),
+    (0, roles_decorator_1.Roles)(enums_1.UserRole.SUPER_ADMIN, enums_1.UserRole.FPA, enums_1.UserRole.LECTEUR),
+    (0, common_1.UseGuards)(jwt_auth_guard_1.JwtAuthGuard, roles_guard_1.RolesGuard, org_guard_1.OrgGuard),
+    __param(0, (0, common_1.Req)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Object]),
+    __metadata("design:returntype", Promise)
+], CashFlowController.prototype, "getCashFlow", null);
+__decorate([
+    (0, common_1.Get)('entries'),
     (0, roles_decorator_1.Roles)(enums_1.UserRole.SUPER_ADMIN, enums_1.UserRole.FPA),
     (0, common_1.UseGuards)(jwt_auth_guard_1.JwtAuthGuard, roles_guard_1.RolesGuard, org_guard_1.OrgGuard),
     __param(0, (0, common_1.Req)()),
@@ -57,7 +79,7 @@ __decorate([
     __metadata("design:type", Function),
     __metadata("design:paramtypes", [Object, String, String]),
     __metadata("design:returntype", Promise)
-], CashFlowController.prototype, "list", null);
+], CashFlowController.prototype, "listEntries", null);
 __decorate([
     (0, common_1.Post)(),
     (0, roles_decorator_1.Roles)(enums_1.UserRole.SUPER_ADMIN, enums_1.UserRole.FPA),
@@ -69,6 +91,35 @@ __decorate([
     __metadata("design:returntype", Promise)
 ], CashFlowController.prototype, "createOrUpdate", null);
 __decorate([
+    (0, common_1.Get)('plans'),
+    (0, roles_decorator_1.Roles)(enums_1.UserRole.SUPER_ADMIN, enums_1.UserRole.FPA, enums_1.UserRole.LECTEUR),
+    (0, common_1.UseGuards)(jwt_auth_guard_1.JwtAuthGuard, roles_guard_1.RolesGuard, org_guard_1.OrgGuard),
+    __param(0, (0, common_1.Req)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Object]),
+    __metadata("design:returntype", Promise)
+], CashFlowController.prototype, "listPlans", null);
+__decorate([
+    (0, common_1.Post)('plans'),
+    (0, roles_decorator_1.Roles)(enums_1.UserRole.SUPER_ADMIN, enums_1.UserRole.FPA),
+    (0, common_1.UseGuards)(jwt_auth_guard_1.JwtAuthGuard, roles_guard_1.RolesGuard, org_guard_1.OrgGuard),
+    __param(0, (0, common_1.Req)()),
+    __param(1, (0, common_1.Body)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Object, create_cash_flow_entry_dto_1.CreateCashFlowEntryDto]),
+    __metadata("design:returntype", Promise)
+], CashFlowController.prototype, "createPlanEntry", null);
+__decorate([
+    (0, common_1.Delete)('plans/:id'),
+    (0, roles_decorator_1.Roles)(enums_1.UserRole.SUPER_ADMIN, enums_1.UserRole.FPA),
+    (0, common_1.UseGuards)(jwt_auth_guard_1.JwtAuthGuard, roles_guard_1.RolesGuard, org_guard_1.OrgGuard),
+    __param(0, (0, common_1.Req)()),
+    __param(1, (0, common_1.Param)('id')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Object, String]),
+    __metadata("design:returntype", Promise)
+], CashFlowController.prototype, "deletePlan", null);
+__decorate([
     (0, common_1.Get)('runway'),
     (0, roles_decorator_1.Roles)(enums_1.UserRole.SUPER_ADMIN, enums_1.UserRole.FPA, enums_1.UserRole.LECTEUR),
     (0, common_1.UseGuards)(jwt_auth_guard_1.JwtAuthGuard, roles_guard_1.RolesGuard, org_guard_1.OrgGuard),
@@ -78,7 +129,7 @@ __decorate([
     __metadata("design:returntype", Promise)
 ], CashFlowController.prototype, "runway", null);
 exports.CashFlowController = CashFlowController = __decorate([
-    (0, common_1.Controller)('cashflow'),
+    (0, common_1.Controller)(['cashflow', 'cash-flow']),
     __metadata("design:paramtypes", [cash_flow_service_1.CashFlowService])
 ], CashFlowController);
 //# sourceMappingURL=cash-flow.controller.js.map

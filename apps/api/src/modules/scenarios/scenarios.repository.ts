@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { BudgetStatus, Prisma, ScenarioStatus, ScenarioType } from '@prisma/client';
+import { BudgetStatus, LineType, Prisma, ScenarioStatus, ScenarioType } from '@prisma/client';
 import { UserRole } from '@shared/enums';
 import { PrismaService } from '../../prisma/prisma.service';
 
@@ -163,6 +163,159 @@ export class ScenariosRepository {
         status,
         ...(status === ScenarioStatus.CALCULATED ? { calculated_at: new Date() } : {}),
         ...(status === ScenarioStatus.SAVED ? { saved_at: new Date() } : {}),
+      },
+    });
+  }
+
+  async calculateSnapshotFromBudget(params: {
+    scenarioId: string;
+    orgId: string;
+    budgetId: string;
+    hypotheses: Array<{ parameter: string; value: string; unit: string }>;
+  }): Promise<{
+    period_id: string;
+    is_revenue: Prisma.Decimal;
+    is_expenses: Prisma.Decimal;
+    is_ebitda: Prisma.Decimal;
+    is_net: Prisma.Decimal;
+    bs_assets: Prisma.Decimal;
+    bs_liabilities: Prisma.Decimal;
+    bs_equity: Prisma.Decimal;
+    cf_operating: Prisma.Decimal;
+    cf_investing: Prisma.Decimal;
+    cf_financing: Prisma.Decimal;
+  }> {
+    const lines = await this.prisma.budgetLine.findMany({
+      where: { budget_id: params.budgetId, org_id: params.orgId },
+      select: { period_id: true, line_type: true, amount_budget: true },
+      orderBy: { period_id: 'asc' },
+    });
+
+    if (lines.length === 0) {
+      throw new Error('No budget lines found to calculate scenario');
+    }
+
+    const periodId = lines[0].period_id;
+
+    let revenue = lines
+      .filter((line) => line.line_type === LineType.REVENUE)
+      .reduce((sum, line) => sum + Number(line.amount_budget), 0);
+    let expenses = lines
+      .filter((line) => line.line_type === LineType.EXPENSE)
+      .reduce((sum, line) => sum + Number(line.amount_budget), 0);
+    let capex = lines
+      .filter((line) => line.line_type === LineType.CAPEX)
+      .reduce((sum, line) => sum + Number(line.amount_budget), 0);
+
+    for (const hypothesis of params.hypotheses) {
+      const param = hypothesis.parameter.trim().toLowerCase();
+      const value = Number.parseFloat(hypothesis.value);
+      if (!Number.isFinite(value)) {
+        continue;
+      }
+
+      if (param === 'revenue_growth') {
+        if (hypothesis.unit === '%') {
+          revenue *= 1 + value / 100;
+        } else if (hypothesis.unit === 'FCFA') {
+          revenue += value;
+        } else if (hypothesis.unit === 'multiplier') {
+          revenue *= value;
+        }
+      }
+
+      if (param === 'cost_reduction') {
+        if (hypothesis.unit === '%') {
+          expenses *= 1 - value / 100;
+        } else if (hypothesis.unit === 'FCFA') {
+          expenses = Math.max(0, expenses - value);
+        } else if (hypothesis.unit === 'multiplier') {
+          expenses *= value;
+        }
+      }
+
+      if (param === 'capex_increase') {
+        if (hypothesis.unit === '%') {
+          capex *= 1 + value / 100;
+        } else if (hypothesis.unit === 'FCFA') {
+          capex += value;
+        } else if (hypothesis.unit === 'multiplier') {
+          capex *= value;
+        }
+      }
+    }
+
+    const ebitda = revenue - expenses;
+    const net = ebitda - capex;
+
+    const toDecimal = (n: number) => new Prisma.Decimal(n.toFixed(2));
+
+    return {
+      period_id: periodId,
+      is_revenue: toDecimal(revenue),
+      is_expenses: toDecimal(expenses + capex),
+      is_ebitda: toDecimal(ebitda),
+      is_net: toDecimal(net),
+      bs_assets: toDecimal(revenue * 0.6),
+      bs_liabilities: toDecimal((expenses + capex) * 0.45),
+      bs_equity: toDecimal(revenue * 0.6 - (expenses + capex) * 0.45),
+      cf_operating: toDecimal(ebitda),
+      cf_investing: toDecimal(-capex),
+      cf_financing: toDecimal(0),
+    };
+  }
+
+  async upsertScenarioSnapshot(params: {
+    scenarioId: string;
+    orgId: string;
+    periodId: string;
+    is_revenue: Prisma.Decimal;
+    is_expenses: Prisma.Decimal;
+    is_ebitda: Prisma.Decimal;
+    is_net: Prisma.Decimal;
+    bs_assets: Prisma.Decimal;
+    bs_liabilities: Prisma.Decimal;
+    bs_equity: Prisma.Decimal;
+    cf_operating: Prisma.Decimal;
+    cf_investing: Prisma.Decimal;
+    cf_financing: Prisma.Decimal;
+  }): Promise<void> {
+    await this.prisma.financialSnapshot.upsert({
+      where: {
+        org_id_period_id_scenario_id: {
+          org_id: params.orgId,
+          period_id: params.periodId,
+          scenario_id: params.scenarioId,
+        },
+      },
+      create: {
+        org_id: params.orgId,
+        period_id: params.periodId,
+        scenario_id: params.scenarioId,
+        is_revenue: params.is_revenue,
+        is_expenses: params.is_expenses,
+        is_ebitda: params.is_ebitda,
+        is_net: params.is_net,
+        bs_assets: params.bs_assets,
+        bs_liabilities: params.bs_liabilities,
+        bs_equity: params.bs_equity,
+        cf_operating: params.cf_operating,
+        cf_investing: params.cf_investing,
+        cf_financing: params.cf_financing,
+        calculated_at: new Date(),
+      },
+      update: {
+        is_revenue: params.is_revenue,
+        is_expenses: params.is_expenses,
+        is_ebitda: params.is_ebitda,
+        is_net: params.is_net,
+        bs_assets: params.bs_assets,
+        bs_liabilities: params.bs_liabilities,
+        bs_equity: params.bs_equity,
+        cf_operating: params.cf_operating,
+        cf_investing: params.cf_investing,
+        cf_financing: params.cf_financing,
+        calculated_at: new Date(),
       },
     });
   }

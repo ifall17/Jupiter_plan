@@ -28,6 +28,7 @@ const fiscal_years_module_1 = require("./modules/fiscal-years/fiscal-years.modul
 const transactions_module_1 = require("./modules/transactions/transactions.module");
 const imports_module_1 = require("./modules/imports/imports.module");
 const periods_module_1 = require("./modules/periods/periods.module");
+const comments_module_1 = require("./modules/comments/comments.module");
 const jwt_throttler_guard_1 = require("./common/guards/jwt-throttler.guard");
 const app_controller_1 = require("./app.controller");
 function validateEnv(env) {
@@ -96,6 +97,7 @@ exports.AppModule = AppModule = __decorate([
             transactions_module_1.TransactionsModule,
             imports_module_1.ImportsModule,
             periods_module_1.PeriodsModule,
+            comments_module_1.CommentsModule,
         ],
         providers: [
             {

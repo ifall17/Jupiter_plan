@@ -91,9 +91,9 @@ function normalizeImportPayload(payload: any): ImportUploadPayload {
 
 const departments = ['VENTES', 'ACHATS', 'RH', 'FINANCE', 'MARKETING', 'IT', 'PRODUCTION', 'OPERATIONS'];
 
-function FieldLabel({ children }: { children: ReactNode }) {
+function FieldLabel({ children, htmlFor }: { children: ReactNode; htmlFor?: string }) {
   return (
-    <label style={{ display: 'block', marginBottom: 6, fontSize: 12, fontWeight: 600, color: 'var(--text-md)' }}>
+    <label htmlFor={htmlFor} style={{ display: 'block', marginBottom: 6, fontSize: 12, fontWeight: 600, color: 'var(--text-md)' }}>
       {children}
     </label>
   );
@@ -219,12 +219,13 @@ function AddTransactionModal({
     <ModalShell title="Saisir une transaction" onClose={onClose}>
       <div style={{ display: 'grid', gap: 12 }}>
         <div>
-          <FieldLabel>Date de transaction *</FieldLabel>
+          <FieldLabel htmlFor="transaction-date">Date de transaction *</FieldLabel>
           <input
+            id="transaction-date"
             type="date"
             value={form.transaction_date}
             onChange={(event) => setForm({ ...form, transaction_date: event.target.value })}
-            style={{ width: '100%', border: '1px solid var(--border)', borderRadius: 8, padding: '10px 14px', fontSize: 13 }}
+            className="tx-form-control"
           />
         </div>
         <div>

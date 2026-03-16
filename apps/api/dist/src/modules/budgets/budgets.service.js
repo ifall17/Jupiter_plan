@@ -22,7 +22,9 @@ const enums_1 = require("../../shared/enums");
 const audit_service_1 = require("../../common/services/audit.service");
 const budgets_repository_1 = require("./budgets.repository");
 const BUDGET_ERROR_CODES = {
+    BUDGET_EMPTY: 'BUDGET_EMPTY',
     BUDGET_LOCKED: 'BUDGET_LOCKED',
+    BUDGET_NOT_LOCKED: 'BUDGET_NOT_LOCKED',
     BUDGET_NOT_SUBMITTABLE: 'BUDGET_NOT_SUBMITTABLE',
     BUDGET_NOT_APPROVABLE: 'BUDGET_NOT_APPROVABLE',
     REJECTION_COMMENT_REQUIRED: 'REJECTION_COMMENT_REQUIRED',
@@ -61,10 +63,17 @@ let BudgetsService = BudgetsService_1 = class BudgetsService {
         return this.toBudgetResponse(this.filterByRoleAndDepartment(budget, currentUser));
     }
     async createBudget(currentUser, dto, ipAddress) {
+        if (dto.parent_budget_id) {
+            const parent = await this.budgetsRepository.findByIdInOrg(dto.parent_budget_id, currentUser.org_id);
+            if (!parent || parent.fiscal_year_id !== dto.fiscal_year_id || parent.status !== client_1.BudgetStatus.LOCKED) {
+                throw new common_1.BadRequestException({ code: BUDGET_ERROR_CODES.BUDGET_NOT_LOCKED });
+            }
+        }
         const version = await this.budgetsRepository.getNextVersion(currentUser.org_id, dto.fiscal_year_id);
         const budget = await this.budgetsRepository.create({
             org_id: currentUser.org_id,
             fiscal_year_id: dto.fiscal_year_id,
+            parent_budget_id: dto.parent_budget_id ?? null,
             name: dto.name.trim(),
             version,
             status: client_1.BudgetStatus.DRAFT,
@@ -191,11 +200,20 @@ let BudgetsService = BudgetsService_1 = class BudgetsService {
     }
     async lockBudget(currentUser, budgetId, ipAddress) {
         const budget = await this.ensureOwnedBudget(budgetId, currentUser.org_id);
+        if (budget.budget_lines.length === 0) {
+            throw new common_1.BadRequestException({
+                code: BUDGET_ERROR_CODES.BUDGET_EMPTY,
+                message: 'Impossible de verrouiller un budget sans lignes',
+            });
+        }
         if (budget.status === client_1.BudgetStatus.LOCKED) {
             throw new common_1.BadRequestException({ code: BUDGET_ERROR_CODES.BUDGET_LOCKED });
         }
         if (budget.status !== client_1.BudgetStatus.APPROVED) {
-            throw new common_1.BadRequestException({ code: BUDGET_ERROR_CODES.BUDGET_NOT_APPROVABLE });
+            throw new common_1.BadRequestException({
+                code: BUDGET_ERROR_CODES.BUDGET_NOT_APPROVABLE,
+                message: 'Le budget doit etre APPROVED pour etre verrouille',
+            });
         }
         await this.budgetsRepository.setStatus(budget.id, currentUser.org_id, {
             status: client_1.BudgetStatus.LOCKED,
@@ -216,6 +234,33 @@ let BudgetsService = BudgetsService_1 = class BudgetsService {
         });
         const refreshed = await this.ensureOwnedBudget(budget.id, currentUser.org_id);
         return this.toBudgetResponse(refreshed);
+    }
+    async setAsReference(currentUser, budgetId) {
+        const budget = await this.ensureOwnedBudget(budgetId, currentUser.org_id);
+        if (budget.status !== client_1.BudgetStatus.LOCKED) {
+            throw new common_1.BadRequestException({
+                code: BUDGET_ERROR_CODES.BUDGET_NOT_LOCKED,
+                message: 'Seul un budget VERROUILLE peut etre marque comme reference',
+            });
+        }
+        await this.budgetsRepository.updateMany({
+            org_id: currentUser.org_id,
+            fiscal_year_id: budget.fiscal_year_id,
+            is_reference: true,
+        }, { is_reference: false });
+        await this.budgetsRepository.update(budget.id, currentUser.org_id, {
+            is_reference: true,
+        });
+        const refreshed = await this.ensureOwnedBudget(budget.id, currentUser.org_id);
+        return this.toBudgetResponse(refreshed);
+    }
+    async deleteBudget(currentUser, budgetId) {
+        const budget = await this.ensureOwnedBudget(budgetId, currentUser.org_id);
+        if (budget.status === client_1.BudgetStatus.LOCKED || budget.status === client_1.BudgetStatus.APPROVED) {
+            throw new common_1.BadRequestException({ code: BUDGET_ERROR_CODES.BUDGET_LOCKED });
+        }
+        await this.budgetsRepository.deleteBudget(budget.id, currentUser.org_id);
+        return { success: true };
     }
     async getVariance(currentUser, budgetId) {
         const budget = await this.ensureOwnedBudget(budgetId, currentUser.org_id);
@@ -269,6 +314,8 @@ let BudgetsService = BudgetsService_1 = class BudgetsService {
             status: budget.status,
             version: budget.version,
             fiscal_year_id: budget.fiscal_year_id,
+            parent_budget_id: budget.parent_budget_id,
+            is_reference: budget.is_reference,
             submitted_at: budget.submitted_at,
             submitted_by: budget.submitted_by,
             approved_at: budget.approved_at,

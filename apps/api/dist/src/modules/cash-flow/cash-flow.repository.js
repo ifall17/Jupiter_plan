@@ -49,6 +49,12 @@ let CashFlowRepository = class CashFlowRepository extends base_repository_1.Base
                 org_id: data.org_id ?? '',
                 period_id: data.period_id ?? '',
                 week_number: data.week_number ?? 1,
+                planned_date: data.planned_date ?? null,
+                flow_type: data.flow_type,
+                direction: data.direction,
+                amount: data.amount ?? new client_1.Prisma.Decimal('0'),
+                bank_account_id: data.bank_account_id ?? null,
+                notes: data.notes ?? null,
                 label: data.label ?? '',
                 inflow: data.inflow ?? new client_1.Prisma.Decimal('0'),
                 outflow: data.outflow ?? new client_1.Prisma.Decimal('0'),
@@ -62,6 +68,12 @@ let CashFlowRepository = class CashFlowRepository extends base_repository_1.Base
             where: { id, org_id: orgId },
             data: {
                 label: data.label,
+                planned_date: data.planned_date,
+                flow_type: data.flow_type,
+                direction: data.direction,
+                amount: data.amount,
+                bank_account_id: data.bank_account_id,
+                notes: data.notes,
                 inflow: data.inflow,
                 outflow: data.outflow,
                 balance: data.balance,
@@ -76,6 +88,14 @@ let CashFlowRepository = class CashFlowRepository extends base_repository_1.Base
     async findByIdInOrg(id, orgId) {
         return this.prisma.cashFlowPlan.findFirst({ where: { id, org_id: orgId } });
     }
+    async deletePlan(id, orgId) {
+        const deleted = await this.prisma.cashFlowPlan.deleteMany({
+            where: { id, org_id: orgId },
+        });
+        if (deleted.count === 0) {
+            throw new Error('CASHFLOW_NOT_FOUND');
+        }
+    }
     async findRollingPlans(params) {
         return this.prisma.cashFlowPlan.findMany({
             where: {
@@ -89,8 +109,37 @@ let CashFlowRepository = class CashFlowRepository extends base_repository_1.Base
                     }
                     : {}),
             },
-            orderBy: [{ period_id: 'asc' }, { week_number: 'asc' }],
-            take: 13,
+            orderBy: [{ planned_date: 'asc' }, { period_id: 'asc' }, { week_number: 'asc' }],
+        });
+    }
+    async findPeriodById(periodId, orgId) {
+        return this.prisma.period.findFirst({
+            where: { id: periodId, org_id: orgId },
+            select: { id: true, start_date: true },
+        });
+    }
+    async findPeriodByDate(orgId, plannedDate) {
+        return this.prisma.period.findFirst({
+            where: {
+                org_id: orgId,
+                start_date: { lte: plannedDate },
+                end_date: { gte: plannedDate },
+            },
+            select: {
+                id: true,
+                start_date: true,
+            },
+            orderBy: { start_date: 'asc' },
+        });
+    }
+    async findBankAccountById(orgId, bankAccountId) {
+        return this.prisma.bankAccount.findFirst({
+            where: {
+                id: bankAccountId,
+                org_id: orgId,
+                is_active: true,
+            },
+            select: { id: true },
         });
     }
     async findByPeriodAndWeek(orgId, periodId, weekNumber) {

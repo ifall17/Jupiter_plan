@@ -30,6 +30,9 @@ let KpisController = class KpisController {
     async values(req, periodId, scenarioId) {
         return this.kpisService.getValues(this.getCurrentUser(req), periodId, scenarioId);
     }
+    async calculate(req, periodId) {
+        return this.kpisService.calculateForPeriod(this.getCurrentUser(req).org_id, periodId);
+    }
     async trend(req, kpiCode, fiscalYearId) {
         return this.kpisService.getTrend(this.getCurrentUser(req), kpiCode, fiscalYearId);
     }
@@ -62,6 +65,16 @@ __decorate([
     __metadata("design:paramtypes", [Object, String, String]),
     __metadata("design:returntype", Promise)
 ], KpisController.prototype, "values", null);
+__decorate([
+    (0, common_1.Post)('calculate'),
+    (0, roles_decorator_1.Roles)(enums_1.UserRole.SUPER_ADMIN, enums_1.UserRole.FPA),
+    (0, common_1.UseGuards)(jwt_auth_guard_1.JwtAuthGuard, roles_guard_1.RolesGuard, org_guard_1.OrgGuard),
+    __param(0, (0, common_1.Req)()),
+    __param(1, (0, common_1.Body)('period_id')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Object, String]),
+    __metadata("design:returntype", Promise)
+], KpisController.prototype, "calculate", null);
 __decorate([
     (0, common_1.Get)('trend'),
     (0, roles_decorator_1.Roles)(enums_1.UserRole.SUPER_ADMIN, enums_1.UserRole.FPA, enums_1.UserRole.LECTEUR),

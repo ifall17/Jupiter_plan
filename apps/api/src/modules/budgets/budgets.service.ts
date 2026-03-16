@@ -17,7 +17,9 @@ import { RejectBudgetDto } from './dto/reject-budget.dto';
 import { BudgetResponseDto } from './dto/budget-response.dto';
 
 const BUDGET_ERROR_CODES = {
+  BUDGET_EMPTY: 'BUDGET_EMPTY',
   BUDGET_LOCKED: 'BUDGET_LOCKED',
+  BUDGET_NOT_LOCKED: 'BUDGET_NOT_LOCKED',
   BUDGET_NOT_SUBMITTABLE: 'BUDGET_NOT_SUBMITTABLE',
   BUDGET_NOT_APPROVABLE: 'BUDGET_NOT_APPROVABLE',
   REJECTION_COMMENT_REQUIRED: 'REJECTION_COMMENT_REQUIRED',
@@ -83,11 +85,19 @@ export class BudgetsService {
     dto: CreateBudgetDto,
     ipAddress?: string,
   ): Promise<BudgetResponseDto> {
+    if (dto.parent_budget_id) {
+      const parent = await this.budgetsRepository.findByIdInOrg(dto.parent_budget_id, currentUser.org_id);
+      if (!parent || parent.fiscal_year_id !== dto.fiscal_year_id || parent.status !== BudgetStatus.LOCKED) {
+        throw new BadRequestException({ code: BUDGET_ERROR_CODES.BUDGET_NOT_LOCKED });
+      }
+    }
+
     const version = await this.budgetsRepository.getNextVersion(currentUser.org_id, dto.fiscal_year_id);
 
     const budget = await this.budgetsRepository.create({
       org_id: currentUser.org_id,
       fiscal_year_id: dto.fiscal_year_id,
+      parent_budget_id: dto.parent_budget_id ?? null,
       name: dto.name.trim(),
       version,
       status: BudgetStatus.DRAFT,
@@ -274,12 +284,22 @@ export class BudgetsService {
   ): Promise<BudgetResponseDto> {
     const budget = await this.ensureOwnedBudget(budgetId, currentUser.org_id);
 
+    if (budget.budget_lines.length === 0) {
+      throw new BadRequestException({
+        code: BUDGET_ERROR_CODES.BUDGET_EMPTY,
+        message: 'Impossible de verrouiller un budget sans lignes',
+      });
+    }
+
     if (budget.status === BudgetStatus.LOCKED) {
       throw new BadRequestException({ code: BUDGET_ERROR_CODES.BUDGET_LOCKED });
     }
 
     if (budget.status !== BudgetStatus.APPROVED) {
-      throw new BadRequestException({ code: BUDGET_ERROR_CODES.BUDGET_NOT_APPROVABLE });
+      throw new BadRequestException({
+        code: BUDGET_ERROR_CODES.BUDGET_NOT_APPROVABLE,
+        message: 'Le budget doit etre APPROVED pour etre verrouille',
+      });
     }
 
     await this.budgetsRepository.setStatus(budget.id, currentUser.org_id, {
@@ -303,6 +323,50 @@ export class BudgetsService {
 
     const refreshed = await this.ensureOwnedBudget(budget.id, currentUser.org_id);
     return this.toBudgetResponse(refreshed);
+  }
+
+  async setAsReference(
+    currentUser: BudgetCurrentUser,
+    budgetId: string,
+  ): Promise<BudgetResponseDto> {
+    const budget = await this.ensureOwnedBudget(budgetId, currentUser.org_id);
+
+    if (budget.status !== BudgetStatus.LOCKED) {
+      throw new BadRequestException({
+        code: BUDGET_ERROR_CODES.BUDGET_NOT_LOCKED,
+        message: 'Seul un budget VERROUILLE peut etre marque comme reference',
+      });
+    }
+
+    await this.budgetsRepository.updateMany(
+      {
+        org_id: currentUser.org_id,
+        fiscal_year_id: budget.fiscal_year_id,
+        is_reference: true,
+      },
+      { is_reference: false },
+    );
+
+    await this.budgetsRepository.update(budget.id, currentUser.org_id, {
+      is_reference: true,
+    } as Partial<RepoBudget>);
+
+    const refreshed = await this.ensureOwnedBudget(budget.id, currentUser.org_id);
+    return this.toBudgetResponse(refreshed);
+  }
+
+  async deleteBudget(
+    currentUser: BudgetCurrentUser,
+    budgetId: string,
+  ): Promise<{ success: true }> {
+    const budget = await this.ensureOwnedBudget(budgetId, currentUser.org_id);
+
+    if (budget.status === BudgetStatus.LOCKED || budget.status === BudgetStatus.APPROVED) {
+      throw new BadRequestException({ code: BUDGET_ERROR_CODES.BUDGET_LOCKED });
+    }
+
+    await this.budgetsRepository.deleteBudget(budget.id, currentUser.org_id);
+    return { success: true };
   }
 
   async getVariance(currentUser: BudgetCurrentUser, budgetId: string): Promise<{
@@ -382,6 +446,8 @@ export class BudgetsService {
       status: budget.status,
       version: budget.version,
       fiscal_year_id: budget.fiscal_year_id,
+      parent_budget_id: budget.parent_budget_id,
+      is_reference: budget.is_reference,
       submitted_at: budget.submitted_at,
       submitted_by: budget.submitted_by,
       approved_at: budget.approved_at,

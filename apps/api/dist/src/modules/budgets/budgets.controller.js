@@ -45,6 +45,9 @@ let BudgetsController = class BudgetsController {
     async create(req, dto) {
         return this.budgetsService.createBudget(this.getCurrentUser(req), dto, this.extractIp(req));
     }
+    async remove(req, id) {
+        return this.budgetsService.deleteBudget(this.getCurrentUser(req), id);
+    }
     async updateLines(req, id, dto) {
         return this.budgetsService.updateLines(this.getCurrentUser(req), id, dto);
     }
@@ -59,6 +62,9 @@ let BudgetsController = class BudgetsController {
     }
     async lock(req, id) {
         return this.budgetsService.lockBudget(this.getCurrentUser(req), id, this.extractIp(req));
+    }
+    async setAsReference(req, id) {
+        return this.budgetsService.setAsReference(this.getCurrentUser(req), id);
     }
     async variance(req, id) {
         return this.budgetsService.getVariance(this.getCurrentUser(req), id);
@@ -122,6 +128,17 @@ __decorate([
     __metadata("design:returntype", Promise)
 ], BudgetsController.prototype, "create", null);
 __decorate([
+    (0, common_1.Delete)(':id'),
+    (0, common_1.HttpCode)(200),
+    (0, roles_decorator_1.Roles)(enums_1.UserRole.SUPER_ADMIN, enums_1.UserRole.FPA),
+    (0, common_1.UseGuards)(jwt_auth_guard_1.JwtAuthGuard, roles_guard_1.RolesGuard, org_guard_1.OrgGuard),
+    __param(0, (0, common_1.Req)()),
+    __param(1, (0, common_1.Param)('id')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Object, String]),
+    __metadata("design:returntype", Promise)
+], BudgetsController.prototype, "remove", null);
+__decorate([
     (0, common_1.Put)(':id/lines'),
     (0, roles_decorator_1.Roles)(enums_1.UserRole.SUPER_ADMIN, enums_1.UserRole.FPA, enums_1.UserRole.CONTRIBUTEUR),
     (0, common_1.UseGuards)(jwt_auth_guard_1.JwtAuthGuard, roles_guard_1.RolesGuard, org_guard_1.OrgGuard, dept_guard_1.DeptGuard),
@@ -178,6 +195,17 @@ __decorate([
     __metadata("design:paramtypes", [Object, String]),
     __metadata("design:returntype", Promise)
 ], BudgetsController.prototype, "lock", null);
+__decorate([
+    (0, common_1.Post)(':id/set-reference'),
+    (0, common_1.HttpCode)(200),
+    (0, roles_decorator_1.Roles)(enums_1.UserRole.SUPER_ADMIN, enums_1.UserRole.FPA),
+    (0, common_1.UseGuards)(jwt_auth_guard_1.JwtAuthGuard, roles_guard_1.RolesGuard, org_guard_1.OrgGuard),
+    __param(0, (0, common_1.Req)()),
+    __param(1, (0, common_1.Param)('id')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Object, String]),
+    __metadata("design:returntype", Promise)
+], BudgetsController.prototype, "setAsReference", null);
 __decorate([
     (0, common_1.Get)(':id/variance'),
     (0, roles_decorator_1.Roles)(enums_1.UserRole.SUPER_ADMIN, enums_1.UserRole.FPA, enums_1.UserRole.LECTEUR),
