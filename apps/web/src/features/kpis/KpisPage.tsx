@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useOrgStore } from '../../stores/org.store';
 import apiClient, { unwrapApiData } from '../../api/client';
 import { formatFCFA } from '../../utils/currency';
+import { usePeriodStore } from '../../stores/period.store';
 
 type KpiValue = {
   kpi_id: string;
@@ -19,11 +19,6 @@ type KpiValue = {
   threshold_warn?: string | number | null;
 };
 
-type PeriodItem = {
-  id: string;
-  label: string;
-  status: 'OPEN' | 'CLOSED';
-};
 
 function getStatus(kpi: KpiValue): string {
   if (kpi.status) return kpi.status;
@@ -42,47 +37,34 @@ function getAccentClass(status: string): string {
 
 export default function KpisPage() {
   const queryClient = useQueryClient();
-  const currentPeriod = useOrgStore((s) => s.currentPeriod);
   const [isCalculating, setIsCalculating] = useState(false);
-  const [selectedPeriodId, setSelectedPeriodId] = useState('');
-
-  const { data: periods } = useQuery({
-    queryKey: ['periods-all'],
-    queryFn: () => apiClient.get('/periods').then((r) => unwrapApiData<PeriodItem[]>(r)),
-  });
-
-  useEffect(() => {
-    if (!selectedPeriodId && periods && periods.length > 0) {
-      const open = periods.find((p) => p.status === 'OPEN');
-      setSelectedPeriodId(open?.id ?? periods[0].id);
-    }
-  }, [periods, selectedPeriodId]);
-
-  const effectivePeriodId = useMemo(
-    () => selectedPeriodId || currentPeriod || '',
-    [selectedPeriodId, currentPeriod],
-  );
+  const { currentPeriodId, isYTD } = usePeriodStore();
 
   const { data: kpis, isLoading, isError } = useQuery({
-    queryKey: ['kpis', effectivePeriodId],
-    enabled: Boolean(effectivePeriodId),
+    queryKey: ['kpi-values', currentPeriodId, isYTD],
+    enabled: Boolean(currentPeriodId) || isYTD,
     queryFn: () =>
       apiClient
-        .get<KpiValue[]>(`/kpis/values?period_id=${effectivePeriodId}`)
+        .get<KpiValue[]>('/kpis/values', {
+          params: {
+            period_id: isYTD ? undefined : currentPeriodId,
+            ytd: isYTD ? true : undefined,
+          },
+        })
         .then(unwrapApiData),
   });
 
   const handleCalculate = async () => {
-    console.log('Period ID:', effectivePeriodId);
-    if (!effectivePeriodId) {
+    console.log('Period ID:', currentPeriodId);
+    if (!currentPeriodId) {
       alert('Aucune période sélectionnée - changer la période en haut de page');
       return;
     }
     setIsCalculating(true);
     try {
-      await apiClient.post('/kpis/calculate', { period_id: effectivePeriodId });
+      await apiClient.post('/kpis/calculate', { period_id: currentPeriodId });
       setTimeout(() => {
-        queryClient.invalidateQueries({ queryKey: ['kpis'] });
+        queryClient.invalidateQueries({ queryKey: ['kpi-values'] });
         setIsCalculating(false);
       }, 2000);
     } catch (err: unknown) {
@@ -103,6 +85,7 @@ export default function KpisPage() {
           <h1 className="page-title">KPIs & Indicateurs</h1>
           <p className="page-sub">
             {isLoading ? '\u2026' : `${values.length} indicateur(s)`}
+            {isYTD ? ' · mode YTD' : ''}
             {criticalCount > 0 ? ` · ${criticalCount} critique(s)` : ''}
             {warnCount > 0 ? ` · ${warnCount} en attention` : ''}
           </p>
@@ -110,40 +93,24 @@ export default function KpisPage() {
         <button
           type="button"
           onClick={handleCalculate}
-          disabled={isCalculating || !effectivePeriodId}
+          disabled={isCalculating || !currentPeriodId}
           style={{
             padding: '9px 20px',
             background: isCalculating ? 'var(--text-lo)' : 'var(--terra)',
             color: 'white',
             border: 'none',
             borderRadius: 8,
-            cursor: isCalculating || !effectivePeriodId ? 'not-allowed' : 'pointer',
+            cursor: isCalculating || !currentPeriodId ? 'not-allowed' : 'pointer',
             fontSize: 13,
             fontWeight: 600,
           }}
         >
           {isCalculating ? 'Calcul en cours\u2026' : '\u26a1 Calculer les KPIs'}
         </button>
-        <select
-          value={effectivePeriodId}
-          onChange={(event) => setSelectedPeriodId(event.target.value)}
-          style={{
-            padding: '7px 12px',
-            borderRadius: 8,
-            border: '1px solid var(--border)',
-            fontSize: 12,
-            background: 'var(--surface)',
-          }}
-        >
-          {(periods ?? []).map((period) => (
-            <option key={period.id} value={period.id}>
-              {period.label}
-            </option>
-          ))}
-        </select>
+
       </div>
 
-      {!effectivePeriodId && !isLoading && (
+      {!currentPeriodId && !isLoading && (
         <div style={{ padding: 40, textAlign: 'center', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 14, color: 'var(--text-lo)' }}>
           <p style={{ fontSize: 28 }}>📊</p>
           <p style={{ fontWeight: 600, marginTop: 8, color: 'var(--text-md)' }}>Aucune période active</p>
@@ -151,7 +118,7 @@ export default function KpisPage() {
         </div>
       )}
 
-      {isLoading && effectivePeriodId && (
+      {isLoading && currentPeriodId && (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16 }}>
           {[...Array(5)].map((_, i) => (
             <div key={i} style={{ height: 110, background: 'var(--surface2)', borderRadius: 14, animation: 'pulse 1.5s ease infinite' }} />
@@ -165,7 +132,7 @@ export default function KpisPage() {
         </div>
       )}
 
-      {!isLoading && !isError && effectivePeriodId && (
+      {!isLoading && !isError && currentPeriodId && (
         <>
           {values.length === 0 ? (
             <div style={{ padding: 48, textAlign: 'center', color: 'var(--text-lo)', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 14 }}>
@@ -224,6 +191,21 @@ export default function KpisPage() {
                     <div style={{ flex: 1 }}>
                       <p style={{ fontSize: 10, fontWeight: 600, letterSpacing: '0.14em', textTransform: 'uppercase', color: 'var(--text-lo)', marginBottom: 8 }}>
                         {label}
+                        {isYTD && (
+                          <span
+                            style={{
+                              padding: '2px 8px',
+                              borderRadius: 20,
+                              fontSize: 9,
+                              fontWeight: 700,
+                              background: 'var(--indigo-lt)',
+                              color: 'var(--indigo)',
+                              marginLeft: 6,
+                            }}
+                          >
+                            YTD
+                          </span>
+                        )}
                       </p>
                       <p style={{ fontSize: 24, fontWeight: 700, color: 'var(--text-hi)', letterSpacing: '-0.02em' }}>
                         {kpi.unit === '%'

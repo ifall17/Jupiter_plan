@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import apiClient from '../../api/client';
 import { formatFCFA } from '../../utils/currency';
 import { formatDate } from '../../utils/date';
+import { usePeriodStore } from '../../stores/period.store';
 
 type CashFlowWeek = {
   week: number;
@@ -493,10 +494,12 @@ export default function CashFlowPage() {
   const queryClient = useQueryClient();
   const [showEntryModal, setShowEntryModal] = useState(false);
   const [showBankModal, setShowBankModal] = useState(false);
+  const currentPeriodId = usePeriodStore((state) => state.currentPeriodId);
 
   const { data: cashFlowData } = useQuery({
-    queryKey: ['cashflow'],
-    queryFn: () => apiClient.get('/cash-flow').then((r) => unwrapEnvelope<CashFlowData>(r.data)),
+    queryKey: ['cashflow', currentPeriodId],
+    queryFn: () => apiClient.get('/cash-flow', { params: { period_id: currentPeriodId } }).then((r) => unwrapEnvelope<CashFlowData>(r.data)),
+    enabled: !!currentPeriodId,
   });
 
   const { data: bankAccounts } = useQuery({
@@ -505,8 +508,9 @@ export default function CashFlowPage() {
   });
 
   const { data: plans } = useQuery({
-    queryKey: ['cashflow-plans'],
-    queryFn: () => apiClient.get('/cash-flow/plans').then((r) => unwrapEnvelope<PlannedFlow[]>(r.data)),
+    queryKey: ['cashflow-plans', currentPeriodId],
+    queryFn: () => apiClient.get('/cash-flow/plans', { params: { period_id: currentPeriodId } }).then((r) => unwrapEnvelope<PlannedFlow[]>(r.data)),
+    enabled: !!currentPeriodId,
   });
 
   const deletePlan = useMutation({

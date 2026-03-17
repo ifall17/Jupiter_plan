@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Bell, LogOut, Settings } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import { UserRole } from '@web/shared/enums';
@@ -8,8 +8,9 @@ import { useAuthStore } from '../../stores/auth.store';
 import { useLogout } from '../../hooks/useAuth';
 import { formatDate } from '../../utils/date';
 import { Link } from 'react-router-dom';
+import { usePeriodStore } from '../../stores/period.store';
 
-type Period = { id: string; start_date: string; label: string };
+type Period = { id: string; start_date: string; label: string; status: string };
 type Alert = { id: string; severity: 'INFO' | 'WARN' | 'CRITICAL'; message: string; created_at: string };
 
 function getRoleClass(role: UserRole): string {
@@ -29,20 +30,20 @@ export default function Topbar(): JSX.Element {
   const logout = useLogout();
   const user = useAuthStore((state) => state.user);
   const orgName = useOrgStore((state) => state.orgName);
-  const currentPeriod = useOrgStore((state) => state.currentPeriod);
-  const fiscalYearId = useOrgStore((state) => state.fiscalYearId);
   const setOrg = useOrgStore((state) => state.setOrg);
   const [openAlerts, setOpenAlerts] = useState<boolean>(false);
   const [openProfile, setOpenProfile] = useState<boolean>(false);
   const profileRef = useRef<HTMLDivElement | null>(null);
+  const { currentPeriod, setPeriod, isYTD, setYTD } = usePeriodStore();
+  const currentMonthLabel = new Date().toLocaleDateString('fr-FR', { month: 'short' });
 
   const periodsQuery = useQuery({
-    queryKey: ['periods', fiscalYearId],
-    enabled: Boolean(fiscalYearId),
+    queryKey: ['periods-topbar'],
     queryFn: async (): Promise<Period[]> => {
-      const response = await apiClient.get<Period[]>(`/periods?fiscal_year_id=${fiscalYearId}&status=OPEN`);
+      const response = await apiClient.get<Period[]>('/periods');
       return unwrapApiData(response);
     },
+    staleTime: 5 * 60 * 1000,
   });
 
   const alertsQuery = useQuery({
@@ -54,16 +55,18 @@ export default function Topbar(): JSX.Element {
     refetchInterval: 60000,
   });
 
-  const selectedPeriodLabel = useMemo(() => {
-    const selected = periodsQuery.data?.find((p) => p.id === currentPeriod);
-    if (!selected) {
-      return 'Periode courante';
-    }
-    return formatDate(selected.start_date, 'month-year');
-  }, [currentPeriod, periodsQuery.data]);
-
   const alerts = alertsQuery.data ?? [];
   const fullName = user ? `${user.first_name} ${user.last_name}` : 'Utilisateur';
+
+  useEffect(() => {
+    if (!periodsQuery.data || periodsQuery.data.length === 0 || currentPeriod) {
+      return;
+    }
+
+    const open = periodsQuery.data.find((period) => period.status === 'OPEN') ?? periodsQuery.data[0];
+    setPeriod({ id: open.id, label: open.label, status: open.status });
+    setOrg({ currentPeriod: open.id });
+  }, [currentPeriod, periodsQuery.data, setOrg, setPeriod]);
 
   useEffect(() => {
     const handler = (event: MouseEvent) => {
@@ -87,13 +90,26 @@ export default function Topbar(): JSX.Element {
         <div className="topbar-actions">
           <select
             className="text-sm topbar-period-select"
-            value={currentPeriod ?? ''}
-            onChange={(event) => setOrg({ currentPeriod: event.target.value || null })}
+            value={isYTD ? 'YTD' : currentPeriod?.id ?? ''}
+            onChange={(event) => {
+              if (event.target.value === 'YTD') {
+                setYTD(true);
+                return;
+              }
+
+              const selected = (periodsQuery.data ?? []).find((period) => period.id === event.target.value);
+              if (!selected) {
+                return;
+              }
+              setPeriod({ id: selected.id, label: selected.label, status: selected.status });
+              setOrg({ currentPeriod: selected.id });
+            }}
           >
-            <option value="">{selectedPeriodLabel}</option>
+            <option value="YTD">Periode courante (Jan → {currentMonthLabel})</option>
+            <option disabled>--------------</option>
             {(periodsQuery.data ?? []).map((period) => (
               <option key={period.id} value={period.id}>
-                {formatDate(period.start_date, 'month-year')}
+                {period.label || formatDate(period.start_date, 'month-year')}
               </option>
             ))}
           </select>

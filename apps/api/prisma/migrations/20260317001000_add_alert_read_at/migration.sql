@@ -1,0 +1,2 @@
+ALTER TABLE "alerts"
+ADD COLUMN IF NOT EXISTS "read_at" TIMESTAMP(3);

@@ -1,9 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import apiClient, { unwrapApiData } from '../../api/client';
 import { formatDate } from '../../utils/date';
+import { usePeriodStore } from '../../stores/period.store';
 
 type Alert = {
   id: string;
+  title?: string;
   kpi_code: string;
   kpi_label: string;
   period_id: string;
@@ -21,33 +23,44 @@ const SEV: Record<string, { bg: string; color: string; icon: string }> = {
   CRITICAL: { bg: 'var(--terra-lt)', color: 'var(--terra)',  icon: '🔴' },
 };
 
-const TH: React.CSSProperties = {
-  padding: '10px 16px', color: 'var(--text-lo)', fontWeight: 600,
-  fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.1em', textAlign: 'left',
-};
-const TD: React.CSSProperties = { padding: '14px 16px', color: 'var(--text-hi)', fontSize: 13 };
-
 export default function AlertsPage() {
   const queryClient = useQueryClient();
+  const { currentPeriodId, isYTD } = usePeriodStore();
 
-  const { data, isLoading, isError } = useQuery({
-    queryKey: ['alerts-all'],
+
+  const { data: alertsData, isLoading, isError } = useQuery({
+    queryKey: ['alerts', currentPeriodId, isYTD],
     queryFn: () =>
-      apiClient.get<PaginatedAlerts>('/alerts?limit=100').then(unwrapApiData),
+      apiClient
+        .get<PaginatedAlerts>('/alerts', {
+          params: {
+            period_id: isYTD ? undefined : currentPeriodId,
+            ytd: isYTD ? true : undefined,
+            limit: 100,
+          },
+        })
+        .then(unwrapApiData),
+    enabled: !!currentPeriodId || isYTD,
     refetchInterval: 60_000,
   });
 
-  const markAll = useMutation({
-    mutationFn: () => apiClient.patch('/alerts/read-all').then((r) => r.data),
-    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['alerts-all'] }),
+  const markAsRead = useMutation({
+    mutationFn: (id: string) => apiClient.patch(`/alerts/${id}/read`),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['alerts'] });
+    },
   });
 
-  const markOne = useMutation({
-    mutationFn: (id: string) => apiClient.patch(`/alerts/${id}/read`).then((r) => r.data),
-    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['alerts-all'] }),
+  const markAllAsRead = useMutation({
+    mutationFn: () => apiClient.patch('/alerts/read-all'),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['alerts'] });
+    },
   });
 
-  const alerts = data?.data ?? [];
+  const alerts = Array.isArray(alertsData)
+    ? alertsData
+    : ((alertsData as PaginatedAlerts | undefined)?.data ?? []);
   const unreadCount = alerts.filter((a) => !a.is_read).length;
 
   return (
@@ -61,18 +74,26 @@ export default function AlertsPage() {
             {' · '}{alerts.length} total
           </p>
         </div>
-        {unreadCount > 0 && (
-          <button
-            onClick={() => markAll.mutate()}
-            disabled={markAll.isPending}
-            style={{
-              padding: '8px 20px', background: 'var(--terra)', color: 'white',
-              border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 13, fontWeight: 600,
-            }}
-          >
-            {markAll.isPending ? '…' : 'Tout marquer comme lu'}
-          </button>
-        )}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          {alerts.filter((alert) => !alert.is_read).length > 0 && (
+            <button
+              onClick={() => markAllAsRead.mutate()}
+              disabled={markAllAsRead.isPending}
+              style={{
+                padding: '9px 18px',
+                background: 'var(--surface)',
+                border: '1px solid var(--border)',
+                borderRadius: 8,
+                cursor: 'pointer',
+                fontSize: 13,
+                fontWeight: 600,
+                color: 'var(--text-hi)',
+              }}
+            >
+              ✓ Tout marquer comme lu
+            </button>
+          )}
+        </div>
       </div>
 
       {isLoading && (
@@ -90,73 +111,118 @@ export default function AlertsPage() {
       )}
 
       {!isLoading && !isError && (
-        <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 14, overflow: 'hidden' }}>
+        <div style={{ display: 'grid', gap: 12 }}>
           {alerts.length === 0 ? (
-            <div style={{ padding: 48, textAlign: 'center', color: 'var(--text-lo)' }}>
+            <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 14, padding: 48, textAlign: 'center', color: 'var(--text-lo)' }}>
               <p style={{ fontSize: 28 }}>✅</p>
               <p style={{ fontWeight: 600, marginTop: 8, color: 'var(--text-md)' }}>Aucune alerte active</p>
             </div>
           ) : (
-            <div style={{ overflowX: 'auto' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-                <thead>
-                  <tr style={{ borderBottom: '1px solid var(--border)', background: 'var(--surface2)' }}>
-                    <th style={TH}>Sévérité</th>
-                    <th style={TH}>KPI</th>
-                    <th style={TH}>Message</th>
-                    <th style={TH}>Date</th>
-                    <th style={{ ...TH, textAlign: 'center' }}>Statut</th>
-                    <th style={{ ...TH, textAlign: 'center' }}>Action</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {alerts.map((a, idx) => {
-                    const sev = SEV[a.severity] ?? SEV.INFO;
-                    return (
-                      <tr
-                        key={a.id}
-                        data-testid="alert-row"
+            alerts.map((alert) => {
+              const sev = SEV[alert.severity] ?? SEV.INFO;
+
+              return (
+                <div
+                  key={alert.id}
+                  style={{
+                    background: alert.is_read ? 'var(--surface)' : 'var(--surface2)',
+                    border: `1px solid ${
+                      alert.severity === 'CRITICAL'
+                        ? 'var(--terra)'
+                        : alert.severity === 'WARN'
+                          ? 'var(--gold)'
+                          : 'var(--border)'
+                    }`,
+                    borderLeft: `4px solid ${
+                      alert.severity === 'CRITICAL'
+                        ? 'var(--terra)'
+                        : alert.severity === 'WARN'
+                          ? 'var(--gold)'
+                          : 'var(--indigo)'
+                    }`,
+                    borderRadius: 12,
+                    padding: '16px 20px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 16,
+                    opacity: alert.is_read ? 0.6 : 1,
+                  }}
+                >
+                  <span style={{ fontSize: 20, flexShrink: 0 }}>{sev.icon}</span>
+
+                  <div style={{ flex: 1 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                      <span
                         style={{
-                          borderBottom: idx < alerts.length - 1 ? '1px solid var(--border)' : 'none',
-                          opacity: a.is_read ? 0.6 : 1,
-                          transition: 'opacity 0.2s',
+                          padding: '2px 8px',
+                          borderRadius: 20,
+                          fontSize: 10,
+                          fontWeight: 700,
+                          background:
+                            alert.severity === 'CRITICAL'
+                              ? 'var(--terra-lt)'
+                              : alert.severity === 'WARN'
+                                ? 'var(--gold-lt)'
+                                : 'var(--indigo-lt)',
+                          color:
+                            alert.severity === 'CRITICAL'
+                              ? 'var(--terra)'
+                              : alert.severity === 'WARN'
+                                ? 'var(--gold)'
+                                : 'var(--indigo)',
                         }}
                       >
-                        <td style={TD}>
-                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, background: sev.bg, color: sev.color, padding: '3px 10px', borderRadius: 20, fontSize: 11, fontWeight: 600 }}>
-                            {sev.icon} {a.severity}
-                          </span>
-                        </td>
-                        <td style={TD}>
-                          <span style={{ fontWeight: 600, fontSize: 12 }}>{a.kpi_code}</span>
-                          <br />
-                          <span style={{ fontSize: 11, color: 'var(--text-lo)' }}>{a.kpi_label}</span>
-                        </td>
-                        <td style={{ ...TD, maxWidth: 380 }}>{a.message}</td>
-                        <td style={{ ...TD, color: 'var(--text-md)', whiteSpace: 'nowrap' }}>
-                          {formatDate(a.created_at, 'short')}
-                        </td>
-                        <td style={{ ...TD, textAlign: 'center' }}>
-                          <span style={{ fontSize: 11, fontWeight: 600, color: a.is_read ? 'var(--text-lo)' : 'var(--kola)' }}>
-                            {a.is_read ? 'Lu' : '● Non lu'}
-                          </span>
-                        </td>
-                        <td style={{ ...TD, textAlign: 'center' }}>
-                          {!a.is_read && (
-                            <button
-                              onClick={() => markOne.mutate(a.id)}
-                              style={{ background: 'none', border: '1px solid var(--border)', borderRadius: 6, padding: '4px 10px', cursor: 'pointer', fontSize: 11, color: 'var(--text-md)' }}
-                            >
-                              Marquer lu
-                            </button>
-                          )}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
+                        {alert.severity}
+                      </span>
+                      <span style={{ fontSize: 11, color: 'var(--text-lo)' }}>
+                        {formatDate(alert.created_at, 'short')}
+                      </span>
+                      {!alert.is_read && (
+                        <span
+                          style={{
+                            width: 8,
+                            height: 8,
+                            borderRadius: '50%',
+                            background: 'var(--terra)',
+                            display: 'inline-block',
+                          }}
+                        />
+                      )}
+                    </div>
+                    <p style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-hi)', marginBottom: 2 }}>
+                      {alert.title ?? alert.kpi_code}
+                    </p>
+                    <p style={{ fontSize: 12, color: 'var(--text-md)' }}>{alert.message}</p>
+                  </div>
+
+                  {!alert.is_read && (
+                    <button
+                      onClick={() => markAsRead.mutate(alert.id)}
+                      style={{
+                        padding: '6px 14px',
+                        background: 'transparent',
+                        border: '1px solid var(--border)',
+                        borderRadius: 8,
+                        cursor: 'pointer',
+                        fontSize: 12,
+                        fontWeight: 600,
+                        color: 'var(--text-md)',
+                        flexShrink: 0,
+                        whiteSpace: 'nowrap',
+                      }}
+                      onMouseEnter={(event) => {
+                        event.currentTarget.style.background = 'var(--surface2)';
+                      }}
+                      onMouseLeave={(event) => {
+                        event.currentTarget.style.background = 'transparent';
+                      }}
+                    >
+                      ✓ Marquer lue
+                    </button>
+                  )}
+                </div>
+              );
+            })
           )}
         </div>
       )}

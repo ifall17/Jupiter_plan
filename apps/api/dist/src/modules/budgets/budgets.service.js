@@ -141,6 +141,12 @@ let BudgetsService = BudgetsService_1 = class BudgetsService {
     }
     async approveBudget(currentUser, budgetId, ipAddress) {
         const budget = await this.ensureOwnedBudget(budgetId, currentUser.org_id);
+        if (this.hasZeroBudgetedAmount(budget)) {
+            throw new common_1.BadRequestException({
+                code: BUDGET_ERROR_CODES.BUDGET_EMPTY,
+                message: 'Impossible d approuver un budget avec un total budgete egal a 0',
+            });
+        }
         if (budget.status === client_1.BudgetStatus.LOCKED) {
             throw new common_1.BadRequestException({ code: BUDGET_ERROR_CODES.BUDGET_LOCKED });
         }
@@ -200,10 +206,10 @@ let BudgetsService = BudgetsService_1 = class BudgetsService {
     }
     async lockBudget(currentUser, budgetId, ipAddress) {
         const budget = await this.ensureOwnedBudget(budgetId, currentUser.org_id);
-        if (budget.budget_lines.length === 0) {
+        if (this.hasZeroBudgetedAmount(budget)) {
             throw new common_1.BadRequestException({
                 code: BUDGET_ERROR_CODES.BUDGET_EMPTY,
-                message: 'Impossible de verrouiller un budget sans lignes',
+                message: 'Impossible de verrouiller un budget avec un total budgete egal a 0',
             });
         }
         if (budget.status === client_1.BudgetStatus.LOCKED) {
@@ -306,6 +312,10 @@ let BudgetsService = BudgetsService_1 = class BudgetsService {
             ...budget,
             budget_lines: filteredLines,
         };
+    }
+    hasZeroBudgetedAmount(budget) {
+        const totalBudgeted = budget.budget_lines.reduce((sum, line) => sum.plus(line.amount_budget), new client_1.Prisma.Decimal(0));
+        return totalBudgeted.eq(new client_1.Prisma.Decimal(0));
     }
     toBudgetResponse(budget) {
         return {

@@ -9,7 +9,7 @@ import VarianceTable from './components/VarianceTable';
 import AlertsList from './components/AlertsList';
 import DashboardSkeleton from './components/DashboardSkeleton';
 import DashboardError from './components/DashboardError';
-import PeriodSelector from './components/PeriodSelector';
+import { usePeriodStore } from '../../stores/period.store';
 
 interface Alert {
   id: string;
@@ -57,15 +57,21 @@ interface DashboardData {
 }
 
 export default function DashboardPage() {
+  const { currentPeriodId, isYTD } = usePeriodStore();
+
   // Appel API réel — jamais de données hardcodées
   const { data, isLoading, isError } = useQuery({
-    queryKey: ['dashboard'],
+    queryKey: ['dashboard', currentPeriodId, isYTD],
     queryFn: () =>
       apiClient
-        .get<{ success: boolean; data: DashboardData }>(
-          '/dashboard'
-        )
+        .get<{ success: boolean; data: DashboardData }>('/dashboard', {
+          params: {
+            period_id: isYTD ? undefined : currentPeriodId,
+            ytd: isYTD ? true : undefined,
+          },
+        })
         .then((r) => r.data.data),
+    enabled: !!currentPeriodId || isYTD,
     staleTime: 60_000, // cache 1 minute
     retry: 2,
   });
@@ -103,10 +109,11 @@ export default function DashboardPage() {
           <h1 className="page-title">Vue d'ensemble</h1>
           <p className="page-sub">
             Période en cours : <strong>{period.label}</strong>
+            {isYTD ? ' · Vue YTD' : ''}
             {' · '}Statut : <strong>{period.status}</strong>
           </p>
         </div>
-        <PeriodSelector currentPeriod={period} />
+
       </div>
 
       {/* Alertes critiques en haut */}
@@ -122,6 +129,7 @@ export default function DashboardPage() {
           trend={is_summary.revenue_trend}
           color="terra"
           testId="kpi-CA"
+          showYtdBadge={isYTD}
         />
         <KpiCard
           label="EBITDA"
@@ -130,6 +138,7 @@ export default function DashboardPage() {
           trend={is_summary.ebitda_trend}
           color="gold"
           testId="kpi-EBITDA"
+          showYtdBadge={isYTD}
         />
         <KpiCard
           label="Résultat Net"
@@ -137,6 +146,7 @@ export default function DashboardPage() {
           trend={is_summary.net_trend}
           color="kola"
           testId="kpi-MARGE"
+          showYtdBadge={isYTD}
         />
         <KpiCard
           label="Runway Trésorerie"
@@ -154,6 +164,7 @@ export default function DashboardPage() {
                 : 'kola'
           }
           testId="kpi-RUNWAY"
+          showYtdBadge={isYTD}
         />
       </div>
 

@@ -1,5 +1,5 @@
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
-import { AlertSeverity, LineType, Prisma } from '@prisma/client';
+import { AlertSeverity, LineType, PeriodStatus, Prisma } from '@prisma/client';
 import { UserRole } from '@shared/enums';
 import { CACHE_TTL_KPI } from '../../common/constants/business.constants';
 import { PrismaService } from '../../prisma/prisma.service';
@@ -46,9 +46,14 @@ export class KpisService {
 
   async getValues(
     currentUser: KpiCurrentUser,
-    periodId: string,
+    periodId?: string,
     scenarioId?: string,
+    ytd?: boolean,
   ): Promise<KpiValueResponseDto[]> {
+    if (ytd) {
+      return this.getValuesYTD(currentUser);
+    }
+    if (!periodId) return [];
     const cacheKey = this.buildCacheKey(currentUser.org_id, periodId, scenarioId);
     const cached = await this.redisService.get(cacheKey);
     if (cached) {
@@ -226,6 +231,94 @@ export class KpisService {
     );
 
     return { calculated: calculatedCodes.length, kpis: calculatedCodes };
+  }
+
+  private async getValuesYTD(currentUser: KpiCurrentUser): Promise<KpiValueResponseDto[]> {
+    const ytdPeriodIds = await this.resolveYTDPeriodIds(currentUser.org_id);
+    if (ytdPeriodIds.length === 0) return [];
+
+    const ADDITIVE = new Set(['CA', 'EBITDA', 'CHARGES', 'OPEX']);
+    const values = await this.prisma.kpiValue.findMany({
+      where: {
+        org_id: currentUser.org_id,
+        period_id: { in: ytdPeriodIds },
+        scenario_id: null,
+        kpi: { is_active: true },
+      },
+      include: { kpi: true },
+      orderBy: { calculated_at: 'asc' },
+    });
+
+    const byCode = new Map<string, (typeof values)[number][]>();
+    for (const v of values) {
+      const arr = byCode.get(v.kpi.code) ?? [];
+      arr.push(v);
+      byCode.set(v.kpi.code, arr);
+    }
+
+    const result: KpiValueResponseDto[] = [];
+    for (const [code, kpiVals] of byCode.entries()) {
+      const latest = kpiVals[kpiVals.length - 1];
+      const aggregatedValue = ADDITIVE.has(code)
+        ? kpiVals.reduce((s, v) => s.plus(v.value), new Prisma.Decimal(0))
+        : latest.value;
+      const severity = this.computeKpiSeverity(latest.kpi, aggregatedValue.toNumber());
+      result.push({
+        kpi_id: latest.kpi_id,
+        kpi_code: code,
+        kpi_label: latest.kpi.label,
+        unit: latest.kpi.unit,
+        period_id: 'YTD',
+        scenario_id: null,
+        value: aggregatedValue.toDecimalPlaces(2).toString(),
+        severity,
+        calculated_at: latest.calculated_at,
+      });
+    }
+
+    // Recalculate MARGE/MARGE_EBITDA from summed CA and EBITDA
+    const caEntry = result.find((r) => r.kpi_code === 'CA');
+    const ebitdaEntry = result.find((r) => r.kpi_code === 'EBITDA');
+    const margeEntry = result.find((r) => r.kpi_code === 'MARGE_EBITDA' || r.kpi_code === 'MARGE');
+    if (caEntry && ebitdaEntry && margeEntry) {
+      const caDecimal = new Prisma.Decimal(caEntry.value);
+      if (!caDecimal.eq(0)) {
+        const newMarge = new Prisma.Decimal(ebitdaEntry.value)
+          .div(caDecimal)
+          .mul(100)
+          .toDecimalPlaces(2)
+          .toString();
+        margeEntry.value = newMarge;
+        const margeKpiVals = byCode.get(margeEntry.kpi_code);
+        if (margeKpiVals?.length) {
+          margeEntry.severity = this.computeKpiSeverity(margeKpiVals[0].kpi, Number(newMarge));
+        }
+      }
+    }
+
+    return result.sort((a, b) => {
+      const rank: Record<string, number> = { CRITICAL: 3, WARN: 2, INFO: 1 };
+      return (rank[b.severity] ?? 0) - (rank[a.severity] ?? 0);
+    });
+  }
+
+  private async resolveYTDPeriodIds(orgId: string): Promise<string[]> {
+    const currentMonth = new Date().getMonth() + 1;
+    const activePeriod = await this.prisma.period.findFirst({
+      where: { org_id: orgId, status: PeriodStatus.OPEN },
+      select: { fiscal_year_id: true },
+      orderBy: { period_number: 'desc' },
+    });
+    const periods = await this.prisma.period.findMany({
+      where: {
+        org_id: orgId,
+        ...(activePeriod ? { fiscal_year_id: activePeriod.fiscal_year_id } : {}),
+        period_number: { lte: currentMonth },
+      },
+      select: { id: true },
+      orderBy: { period_number: 'asc' },
+    });
+    return periods.map((p) => p.id);
   }
 
   private async seedDefaultKpis(orgId: string): Promise<void> {

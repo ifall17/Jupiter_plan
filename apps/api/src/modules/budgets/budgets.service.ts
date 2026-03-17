@@ -198,6 +198,13 @@ export class BudgetsService {
   ): Promise<BudgetResponseDto> {
     const budget = await this.ensureOwnedBudget(budgetId, currentUser.org_id);
 
+    if (this.hasZeroBudgetedAmount(budget)) {
+      throw new BadRequestException({
+        code: BUDGET_ERROR_CODES.BUDGET_EMPTY,
+        message: 'Impossible d approuver un budget avec un total budgete egal a 0',
+      });
+    }
+
     if (budget.status === BudgetStatus.LOCKED) {
       throw new BadRequestException({ code: BUDGET_ERROR_CODES.BUDGET_LOCKED });
     }
@@ -284,10 +291,10 @@ export class BudgetsService {
   ): Promise<BudgetResponseDto> {
     const budget = await this.ensureOwnedBudget(budgetId, currentUser.org_id);
 
-    if (budget.budget_lines.length === 0) {
+    if (this.hasZeroBudgetedAmount(budget)) {
       throw new BadRequestException({
         code: BUDGET_ERROR_CODES.BUDGET_EMPTY,
-        message: 'Impossible de verrouiller un budget sans lignes',
+        message: 'Impossible de verrouiller un budget avec un total budgete egal a 0',
       });
     }
 
@@ -437,6 +444,15 @@ export class BudgetsService {
       ...budget,
       budget_lines: filteredLines,
     };
+  }
+
+  private hasZeroBudgetedAmount(budget: RepoBudget): boolean {
+    const totalBudgeted = budget.budget_lines.reduce(
+      (sum, line) => sum.plus(line.amount_budget),
+      new Prisma.Decimal(0),
+    );
+
+    return totalBudgeted.eq(new Prisma.Decimal(0));
   }
 
   private toBudgetResponse(budget: RepoBudget): BudgetResponseDto {

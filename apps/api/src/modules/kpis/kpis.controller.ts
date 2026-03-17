@@ -25,10 +25,11 @@ export class KpisController {
   @UseGuards(JwtAuthGuard, RolesGuard, OrgGuard)
   async values(
     @Req() req: Request,
-    @Query('period_id') periodId: string,
-    @Query('scenario_id') scenarioId?: string,
+     @Query('period_id') periodId?: string,
+     @Query('scenario_id') scenarioId?: string,
+     @Query('ytd') ytd?: string,
   ): Promise<KpiValueResponseDto[]> {
-    return this.kpisService.getValues(this.getCurrentUser(req), periodId, scenarioId);
+     return this.kpisService.getValues(this.getCurrentUser(req), periodId, scenarioId, ytd === 'true');
   }
 
   @Post('calculate')

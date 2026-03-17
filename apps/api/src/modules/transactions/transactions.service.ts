@@ -3,7 +3,7 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { PaginatedResponseDto } from '../../common/dto/paginated-response.dto';
 import { CreateTransactionDto } from './dto/create-transaction.dto';
 import { TransactionResponseDto } from './dto/transaction-response.dto';
-import { LineType, Prisma, UserRole } from '@prisma/client';
+import { LineType, PeriodStatus, Prisma, UserRole } from '@prisma/client';
 
 export interface TransactionsCurrentUser {
   sub: string;
@@ -20,6 +20,7 @@ export class TransactionsService {
     period_id?: string;
     department?: string;
     line_type?: LineType;
+      ytd?: boolean;
     page?: number;
     limit?: number;
   }): Promise<PaginatedResponseDto<TransactionResponseDto>> {
@@ -27,16 +28,26 @@ export class TransactionsService {
     const limit = params.limit && params.limit > 0 ? Math.min(params.limit, 100) : 20;
     const skip = (page - 1) * limit;
 
-    const where: Prisma.TransactionWhereInput = {
-      org_id: params.currentUser.org_id,
-      ...(params.period_id ? { period_id: params.period_id } : {}),
-      ...(params.department ? { department: params.department } : {}),
-      ...(params.line_type
-        ? params.line_type === LineType.REVENUE
-          ? { amount: { gt: 0 } }
-          : { amount: { lt: 0 } }
-        : {}),
-    };
+      let periodFilter: Prisma.TransactionWhereInput = {};
+      if (params.ytd) {
+        const ytdIds = await this.resolveYTDPeriodIds(params.currentUser.org_id);
+        if (ytdIds.length > 0) {
+          periodFilter = { period_id: { in: ytdIds } };
+        }
+      } else if (params.period_id) {
+        periodFilter = { period_id: params.period_id };
+      }
+
+      const where: Prisma.TransactionWhereInput = {
+        org_id: params.currentUser.org_id,
+        ...periodFilter,
+        ...(params.department ? { department: params.department } : {}),
+        ...(params.line_type
+          ? params.line_type === LineType.REVENUE
+            ? { amount: { gt: 0 } }
+            : { amount: { lt: 0 } }
+          : {}),
+      };
 
     const [items, total] = await Promise.all([
       this.prisma.transaction.findMany({
@@ -56,6 +67,25 @@ export class TransactionsService {
       limit,
       totalPages: Math.ceil(total / limit),
     };
+  }
+
+  private async resolveYTDPeriodIds(orgId: string): Promise<string[]> {
+    const currentMonth = new Date().getMonth() + 1;
+    const activePeriod = await this.prisma.period.findFirst({
+      where: { org_id: orgId, status: PeriodStatus.OPEN },
+      select: { fiscal_year_id: true },
+      orderBy: { period_number: 'desc' },
+    });
+    const periods = await this.prisma.period.findMany({
+      where: {
+        org_id: orgId,
+        ...(activePeriod ? { fiscal_year_id: activePeriod.fiscal_year_id } : {}),
+        period_number: { lte: currentMonth },
+      },
+      select: { id: true },
+      orderBy: { period_number: 'asc' },
+    });
+    return periods.map((p) => p.id);
   }
 
   async create(currentUser: TransactionsCurrentUser, dto: CreateTransactionDto): Promise<TransactionResponseDto> {

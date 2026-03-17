@@ -31,6 +31,7 @@ export class AlertsController {
     @Query('is_read') isRead?: string,
     @Query('severity') severity?: AlertSeverity,
     @Query('period_id') periodId?: string,
+      @Query('ytd') ytd?: string,
     @Query('page') page?: string,
     @Query('limit') limit?: string,
   ): Promise<PaginatedResponseDto<AlertResponseDto>> {
@@ -39,6 +40,7 @@ export class AlertsController {
       is_read: this.parseBoolean(isRead),
       severity,
       period_id: periodId,
+        ytd: ytd === 'true',
       page: this.parsePositiveInt(page),
       limit: this.parsePositiveInt(limit),
     });

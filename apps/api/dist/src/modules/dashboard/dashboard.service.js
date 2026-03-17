@@ -172,6 +172,52 @@ let SnapshotsRepository = class SnapshotsRepository {
         const variance = actual.minus(budget).div(budget).mul(new client_1.Prisma.Decimal('100'));
         return variance.toDecimalPlaces(2, client_1.Prisma.Decimal.ROUND_HALF_UP).toString();
     }
+    async findVarianceByReferenceBudget(orgId, periodId, fiscalYearId) {
+        const referenceBudget = await this.prisma.budget.findFirst({
+            where: {
+                org_id: orgId,
+                fiscal_year_id: fiscalYearId,
+                is_reference: true,
+                status: client_1.BudgetStatus.LOCKED,
+            },
+            include: {
+                budget_lines: {
+                    where: { period_id: periodId },
+                },
+            },
+        });
+        if (!referenceBudget || referenceBudget.budget_lines.length === 0) {
+            return [];
+        }
+        const groups = new Map();
+        for (const line of referenceBudget.budget_lines) {
+            const key = line.account_label;
+            const existing = groups.get(key) ?? {
+                budgeted: new client_1.Prisma.Decimal(0),
+                actual: new client_1.Prisma.Decimal(0),
+            };
+            groups.set(key, {
+                budgeted: existing.budgeted.plus(line.amount_budget),
+                actual: existing.actual.plus(line.amount_actual),
+            });
+        }
+        return Array.from(groups.entries()).map(([line_label, { budgeted, actual }]) => {
+            const variancePct = budgeted.eq(new client_1.Prisma.Decimal(0))
+                ? 0
+                : actual
+                    .minus(budgeted)
+                    .div(budgeted)
+                    .mul(100)
+                    .toDecimalPlaces(2, client_1.Prisma.Decimal.ROUND_HALF_UP)
+                    .toNumber();
+            return {
+                line_label,
+                budgeted: budgeted.toNumber(),
+                actual: actual.toNumber(),
+                variance_pct: variancePct,
+            };
+        });
+    }
     async findRunwayWeeks(orgId) {
         const [plans, cash] = await this.prisma.$transaction([
             this.prisma.cashFlowPlan.findMany({
@@ -226,7 +272,7 @@ let DashboardService = DashboardService_1 = class DashboardService {
             this.alertsRepository.countUnread(currentUser.org_id, period.id),
             this.alertsRepository.findUnreadTop5(currentUser.org_id, period.id),
             this.snapshotsRepository.findSummary(currentUser.org_id, period.id),
-            this.snapshotsRepository.findVariancePct(currentUser.org_id, period.id),
+            this.snapshotsRepository.findVarianceByReferenceBudget(currentUser.org_id, period.id, period.fiscal_year_id),
             this.snapshotsRepository.findRunwayWeeks(currentUser.org_id),
             this.kpisRepository.findRevenueTrend3(currentUser.org_id, period.fiscal_year_id),
         ]);

@@ -38,6 +38,7 @@ describe('DashboardService', () => {
         snapshotsRepository = {
             findSummary: jest.fn(),
             findVariancePct: jest.fn(),
+            findVarianceByReferenceBudget: jest.fn(),
             findRunwayWeeks: jest.fn(),
         };
         service = new dashboard_service_1.DashboardService(prisma, redis, kpisRepository, alertsRepository, snapshotsRepository);
@@ -97,6 +98,7 @@ describe('DashboardService', () => {
             net: new client_1.Prisma.Decimal('180'),
         });
         snapshotsRepository.findVariancePct.mockResolvedValue('5.23');
+        snapshotsRepository.findVarianceByReferenceBudget.mockResolvedValue([]);
         snapshotsRepository.findRunwayWeeks.mockResolvedValue(8.5);
     });
     it('should return cached dashboard on second call', async () => {
@@ -158,7 +160,7 @@ describe('DashboardService', () => {
         expect(typeof result.is_summary.expenses).toBe('string');
         expect(typeof result.is_summary.ebitda).toBe('string');
         expect(typeof result.is_summary.net).toBe('string');
-        expect(typeof result.variance_pct).toBe('string');
+        expect(Array.isArray(result.variance_pct)).toBe(true);
         expect(typeof result.ca_trend[0].value).toBe('string');
     });
 });

@@ -23,6 +23,7 @@ export class TransactionsController {
     @Query('period_id') periodId?: string,
     @Query('department') department?: string,
     @Query('line_type') lineType?: LineType,
+      @Query('ytd') ytd?: string,
     @Query('page') page?: string,
     @Query('limit') limit?: string,
   ): Promise<PaginatedResponseDto<TransactionResponseDto>> {
@@ -31,6 +32,7 @@ export class TransactionsController {
       period_id: periodId,
       department,
       line_type: lineType,
+        ytd: ytd === 'true',
       page: this.parsePositiveInt(page),
       limit: this.parsePositiveInt(limit),
     });

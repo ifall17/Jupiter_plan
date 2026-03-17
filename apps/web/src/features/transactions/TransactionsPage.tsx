@@ -1,8 +1,9 @@
-import { useMemo, useState, type ChangeEvent, type DragEvent, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type ChangeEvent, type DragEvent, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import apiClient, { unwrapApiData } from '../../api/client';
 import { formatFCFA } from '../../utils/currency';
 import { formatDate } from '../../utils/date';
+import { usePeriodStore } from '../../stores/period.store';
 
 type Transaction = {
   id: string;
@@ -572,8 +573,9 @@ function ImportExcelModal({
 }
 
 export default function TransactionsPage() {
+  const { currentPeriodId, isYTD } = usePeriodStore();
   const [filters, setFilters] = useState({
-    period_id: '',
+    period_id: currentPeriodId,
     department: '',
     line_type: '',
     page: 1,
@@ -586,8 +588,17 @@ export default function TransactionsPage() {
   const queryClient = useQueryClient();
 
   const transactionsQuery = useQuery({
-    queryKey: ['transactions', filters],
-    queryFn: () => apiClient.get<PaginatedTransactions>('/transactions', { params: filters }).then(unwrapApiData),
+    queryKey: ['transactions', filters, isYTD],
+    queryFn: () =>
+      apiClient
+        .get<PaginatedTransactions>('/transactions', {
+          params: {
+            ...filters,
+            period_id: isYTD ? undefined : filters.period_id,
+            ytd: isYTD ? true : undefined,
+          },
+        })
+        .then(unwrapApiData),
   });
 
   const periodsQuery = useQuery({
@@ -608,6 +619,14 @@ export default function TransactionsPage() {
     () => rows.length > 0 && rows.every((transaction) => selectedIds.includes(transaction.id)),
     [rows, selectedIds],
   );
+
+  useEffect(() => {
+    setFilters((prev) => ({
+      ...prev,
+      period_id: currentPeriodId,
+      page: 1,
+    }));
+  }, [currentPeriodId, isYTD]);
 
   return (
     <div style={{ margin: '0 auto', maxWidth: 1360, padding: '28px 32px' }}>
@@ -659,19 +678,6 @@ export default function TransactionsPage() {
       </div>
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginBottom: 20, border: '1px solid var(--border)', borderRadius: 12, background: 'var(--surface)', padding: '14px 18px' }}>
-        <select
-          value={filters.period_id}
-          onChange={(event) => setFilters({ ...filters, period_id: event.target.value, page: 1 })}
-          style={{ minWidth: 160, border: '1px solid var(--border)', borderRadius: 8, background: 'var(--surface)', padding: '7px 12px', fontSize: 12, color: 'var(--text-hi)' }}
-        >
-          <option value="">Toutes les périodes</option>
-          {periodsQuery.data?.map((period) => (
-            <option key={period.id} value={period.id}>
-              {period.label}
-            </option>
-          ))}
-        </select>
-
         <select
           value={filters.department}
           onChange={(event) => setFilters({ ...filters, department: event.target.value, page: 1 })}

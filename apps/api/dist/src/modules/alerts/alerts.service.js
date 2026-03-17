@@ -11,7 +11,6 @@ var __metadata = (this && this.__metadata) || function (k, v) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.AlertsService = void 0;
 const common_1 = require("@nestjs/common");
-const client_1 = require("@prisma/client");
 const prisma_service_1 = require("../../prisma/prisma.service");
 let AlertsService = class AlertsService {
     constructor(prisma) {
@@ -31,20 +30,18 @@ let AlertsService = class AlertsService {
             this.prisma.alert.findMany({
                 where,
                 include: { kpi: true },
+                orderBy: [
+                    { is_read: 'asc' },
+                    { severity: 'desc' },
+                    { created_at: 'desc' },
+                ],
                 skip,
                 take: limit,
             }),
             this.prisma.alert.count({ where }),
         ]);
-        const sorted = alerts.sort((a, b) => {
-            const severityDiff = this.getSeverityRank(b.severity) - this.getSeverityRank(a.severity);
-            if (severityDiff !== 0) {
-                return severityDiff;
-            }
-            return b.created_at.getTime() - a.created_at.getTime();
-        });
         return {
-            data: sorted.map((alert) => ({
+            data: alerts.map((alert) => ({
                 id: alert.id,
                 kpi_id: alert.kpi_id,
                 kpi_code: alert.kpi.code,
@@ -62,13 +59,16 @@ let AlertsService = class AlertsService {
         };
     }
     async markAsRead(currentUser, alertId) {
-        await this.prisma.alert.updateMany({
+        const updated = await this.prisma.alert.updateMany({
             where: {
                 id: alertId,
                 org_id: currentUser.org_id,
             },
             data: { is_read: true },
         });
+        if (updated.count === 0) {
+            throw new common_1.NotFoundException();
+        }
         return { success: true };
     }
     async markAllAsRead(currentUser) {
@@ -80,15 +80,6 @@ let AlertsService = class AlertsService {
             data: { is_read: true },
         });
         return { updated: result.count };
-    }
-    getSeverityRank(severity) {
-        if (severity === client_1.AlertSeverity.CRITICAL) {
-            return 3;
-        }
-        if (severity === client_1.AlertSeverity.WARN) {
-            return 2;
-        }
-        return 1;
     }
 };
 exports.AlertsService = AlertsService;

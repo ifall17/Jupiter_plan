@@ -17,9 +17,10 @@ export class DashboardController {
   @UseGuards(JwtAuthGuard, RolesGuard, OrgGuard)
   async getDashboard(
     @Req() req: Request,
-    @Query('period_id') periodId?: string,
+     @Query('period_id') periodId?: string,
+     @Query('ytd') ytd?: string,
   ): Promise<DashboardResponseDto> {
-    return this.dashboardService.getDashboard(this.getCurrentUser(req), periodId);
+     return this.dashboardService.getDashboard(this.getCurrentUser(req), periodId, ytd === 'true');
   }
 
   private getCurrentUser(req: Request): DashboardCurrentUser {

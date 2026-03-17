@@ -5,6 +5,7 @@ interface KpiCardProps {
   trend?: 'up' | 'down' | 'stable';
   color: 'terra' | 'gold' | 'kola' | 'indigo';
   testId?: string;
+  showYtdBadge?: boolean;
 }
 
 export default function KpiCard({
@@ -14,6 +15,7 @@ export default function KpiCard({
   trend,
   color,
   testId,
+  showYtdBadge,
 }: KpiCardProps) {
   const trendIcon =
     trend === 'up' ? '↑' : trend === 'down' ? '↓' : '→';
@@ -29,6 +31,21 @@ export default function KpiCard({
       <div className="kpi-accent" />
       <div className="kpi-body">
         <p className="kpi-label">{label}</p>
+        {showYtdBadge && (
+          <span
+            style={{
+              padding: '2px 8px',
+              borderRadius: 20,
+              fontSize: 9,
+              fontWeight: 700,
+              background: 'var(--indigo-lt)',
+              color: 'var(--indigo)',
+              marginLeft: 6,
+            }}
+          >
+            YTD
+          </span>
+        )}
         <p className="kpi-value" data-testid="kpi-value">
           {value}
         </p>

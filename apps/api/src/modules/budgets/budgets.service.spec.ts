@@ -115,6 +115,46 @@ describe('BudgetsService', () => {
     await expect(act).rejects.toThrow(BadRequestException);
   });
 
+  it('should throw BUDGET_EMPTY when approving budget with zero total budgeted', async () => {
+    // Arrange
+    budgetsRepository.findByIdInOrg.mockResolvedValue({
+      ...baseBudget,
+      status: BudgetStatus.SUBMITTED,
+      budget_lines: [
+        {
+          ...baseBudget.budget_lines[0],
+          amount_budget: new Prisma.Decimal('0'),
+        },
+      ],
+    } as never);
+
+    // Act
+    const act = service.approveBudget(currentUser, 'budget-1');
+
+    // Assert
+    await expect(act).rejects.toThrow(BadRequestException);
+  });
+
+  it('should throw BUDGET_EMPTY when locking budget with zero total budgeted', async () => {
+    // Arrange
+    budgetsRepository.findByIdInOrg.mockResolvedValue({
+      ...baseBudget,
+      status: BudgetStatus.APPROVED,
+      budget_lines: [
+        {
+          ...baseBudget.budget_lines[0],
+          amount_budget: new Prisma.Decimal('0'),
+        },
+      ],
+    } as never);
+
+    // Act
+    const act = service.lockBudget(currentUser, 'budget-1');
+
+    // Assert
+    await expect(act).rejects.toThrow(BadRequestException);
+  });
+
   it('should throw REJECTION_COMMENT_REQUIRED when comment is empty', async () => {
     // Arrange
     budgetsRepository.findByIdInOrg.mockResolvedValue({ ...baseBudget, status: BudgetStatus.SUBMITTED } as never);
