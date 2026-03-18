@@ -573,7 +573,7 @@ function ImportExcelModal({
 }
 
 export default function TransactionsPage() {
-  const { currentPeriodId, isYTD } = usePeriodStore();
+  const { mode, quarterNumber, customFrom, customTo, currentPeriodId } = usePeriodStore();
   const [filters, setFilters] = useState({
     period_id: currentPeriodId,
     department: '',
@@ -587,18 +587,34 @@ export default function TransactionsPage() {
 
   const queryClient = useQueryClient();
 
+  const getPeriodParams = () => {
+    // Le filtre local (zoom mois) a la priorité sur le mode Topbar
+    if (filters.period_id) return { period_id: filters.period_id };
+    if (mode === 'ytd') return { ytd: true };
+    if (mode === 'quarter') return { quarter: quarterNumber ?? undefined };
+    if (mode === 'custom') return { from_period: customFrom ?? undefined, to_period: customTo ?? undefined };
+    return {};
+  };
+
   const transactionsQuery = useQuery({
-    queryKey: ['transactions', filters, isYTD],
+    queryKey: ['transactions', filters, mode, quarterNumber, customFrom, customTo, currentPeriodId],
     queryFn: () =>
       apiClient
         .get<PaginatedTransactions>('/transactions', {
           params: {
-            ...filters,
-            period_id: isYTD ? undefined : filters.period_id,
-            ytd: isYTD ? true : undefined,
+            department: filters.department || undefined,
+            line_type: filters.line_type || undefined,
+            page: filters.page,
+            limit: filters.limit,
+            ...getPeriodParams(),
           },
         })
         .then(unwrapApiData),
+    enabled:
+      mode === 'ytd' ||
+      (mode === 'quarter' && quarterNumber != null) ||
+      (mode === 'custom' && !!customFrom && !!customTo) ||
+      (mode === 'single' && (!!filters.period_id || !!currentPeriodId)),
   });
 
   const periodsQuery = useQuery({
@@ -623,10 +639,13 @@ export default function TransactionsPage() {
   useEffect(() => {
     setFilters((prev) => ({
       ...prev,
-      period_id: currentPeriodId,
+      // En mode single, on pré-sélectionne la période courante
+      // En ytd/quarter/custom, on laisse vide pour que le select
+      // permette de zoomer sur un mois spécifique
+      period_id: mode === 'single' ? currentPeriodId : '',
       page: 1,
     }));
-  }, [currentPeriodId, isYTD]);
+  }, [currentPeriodId, mode]);
 
   return (
     <div style={{ margin: '0 auto', maxWidth: 1360, padding: '28px 32px' }}>
@@ -678,6 +697,27 @@ export default function TransactionsPage() {
       </div>
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginBottom: 20, border: '1px solid var(--border)', borderRadius: 12, background: 'var(--surface)', padding: '14px 18px' }}>
+        <select
+          value={filters.period_id}
+          onChange={(event) => setFilters({ ...filters, period_id: event.target.value, page: 1 })}
+          style={{ minWidth: 190, border: '1px solid var(--border)', borderRadius: 8, background: 'var(--surface)', padding: '7px 12px', fontSize: 12, color: 'var(--text-hi)' }}
+        >
+          <option value="">
+            {mode === 'ytd'
+              ? 'Tous les mois (YTD)'
+              : mode === 'quarter'
+                ? `Tout le trimestre T${quarterNumber}`
+                : mode === 'custom'
+                  ? 'Toute la plage personnalisée'
+                  : 'Toutes les périodes'}
+          </option>
+          {(periodsQuery.data ?? []).map((p) => (
+            <option key={p.id} value={p.id}>
+              {p.label}
+            </option>
+          ))}
+        </select>
+
         <select
           value={filters.department}
           onChange={(event) => setFilters({ ...filters, department: event.target.value, page: 1 })}

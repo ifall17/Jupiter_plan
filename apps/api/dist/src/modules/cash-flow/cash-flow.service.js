@@ -17,8 +17,18 @@ let CashFlowService = class CashFlowService {
     constructor(cashFlowRepository) {
         this.cashFlowRepository = cashFlowRepository;
     }
-    async getRollingPlan(orgId) {
-        const plans = await this.cashFlowRepository.findRollingPlans({ org_id: orgId });
+    async getRollingPlan(params) {
+        const periodIds = await this.resolvePeriodIds(params.org_id, {
+            period_id: params.period_id,
+            ytd: params.ytd,
+            quarter: params.quarter,
+            from_period: params.from_period,
+            to_period: params.to_period,
+        });
+        const plans = await this.cashFlowRepository.findRollingPlans({
+            org_id: params.org_id,
+            period_ids: periodIds.length > 0 ? periodIds : undefined,
+        });
         const now = new Date();
         now.setHours(0, 0, 0, 0);
         const weekMs = 7 * 24 * 60 * 60 * 1000;
@@ -122,8 +132,18 @@ let CashFlowService = class CashFlowService {
         });
         return plans.map((plan) => this.toResponse(plan));
     }
-    async listPlans(currentUser) {
-        const plans = await this.cashFlowRepository.findRollingPlans({ org_id: currentUser.org_id });
+    async listPlans(currentUser, params) {
+        const periodIds = await this.resolvePeriodIds(currentUser.org_id, {
+            period_id: params?.period_id,
+            ytd: params?.ytd,
+            quarter: params?.quarter,
+            from_period: params?.from_period,
+            to_period: params?.to_period,
+        });
+        const plans = await this.cashFlowRepository.findRollingPlans({
+            org_id: currentUser.org_id,
+            period_ids: periodIds.length > 0 ? periodIds : undefined,
+        });
         return plans.map((plan) => this.toResponse(plan));
     }
     async deletePlan(id, orgId) {
@@ -193,6 +213,39 @@ let CashFlowService = class CashFlowService {
             return { runway_weeks: runway, severity: 'WARN', threshold_warn: 8, threshold_critical: 4 };
         }
         return { runway_weeks: runway, severity: 'INFO', threshold_warn: 8, threshold_critical: 4 };
+    }
+    async resolvePeriodIds(orgId, params) {
+        if (params.period_id) {
+            return [params.period_id];
+        }
+        const activePeriod = await this.cashFlowRepository.findActivePeriod(orgId);
+        const fiscalYearId = activePeriod?.fiscal_year_id;
+        if (!fiscalYearId) {
+            return [];
+        }
+        if (params.ytd) {
+            const currentMonth = new Date().getMonth() + 1;
+            const periods = await this.cashFlowRepository.findPeriodsByRange(orgId, fiscalYearId, 1, currentMonth);
+            return periods.map((p) => p.id);
+        }
+        if (params.quarter && params.quarter >= 1 && params.quarter <= 4) {
+            const start = (params.quarter - 1) * 3 + 1;
+            const end = start + 2;
+            const periods = await this.cashFlowRepository.findPeriodsByRange(orgId, fiscalYearId, start, end);
+            return periods.map((p) => p.id);
+        }
+        if (params.from_period && params.to_period) {
+            const from = await this.cashFlowRepository.findPeriodDetails(params.from_period, orgId);
+            const to = await this.cashFlowRepository.findPeriodDetails(params.to_period, orgId);
+            if (!from || !to || from.fiscal_year_id !== to.fiscal_year_id) {
+                return [];
+            }
+            const min = Math.min(from.period_number, to.period_number);
+            const max = Math.max(from.period_number, to.period_number);
+            const periods = await this.cashFlowRepository.findPeriodsByRange(orgId, from.fiscal_year_id, min, max);
+            return periods.map((p) => p.id);
+        }
+        return [];
     }
     calculateRunwayWeeks(cashBalance, weeklyBurn) {
         if (weeklyBurn.lte(new client_1.Prisma.Decimal('0'))) {

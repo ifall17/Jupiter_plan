@@ -41,27 +41,39 @@ let KpisService = KpisService_1 = class KpisService {
             is_active: kpi.is_active,
         }));
     }
-    async getValues(currentUser, periodId, scenarioId) {
-        const cacheKey = this.buildCacheKey(currentUser.org_id, periodId, scenarioId);
-        const cached = await this.redisService.get(cacheKey);
-        if (cached) {
-            return JSON.parse(cached);
-        }
-        const values = await this.prisma.kpiValue.findMany({
-            where: {
-                org_id: currentUser.org_id,
-                period_id: periodId,
-                ...(scenarioId ? { scenario_id: scenarioId } : { scenario_id: null }),
-                kpi: { is_active: true },
-            },
-            include: {
-                kpi: true,
-            },
-            orderBy: [{ severity: 'desc' }, { calculated_at: 'desc' }],
+    async getValues(currentUser, periodId, scenarioId, ytd, quarter, fromPeriod, toPeriod) {
+        const resolution = await this.resolvePeriodIds(currentUser.org_id, {
+            periodId,
+            ytd,
+            quarter,
+            fromPeriod,
+            toPeriod,
         });
-        const response = values.map((value) => this.toValueResponse(value));
-        await this.redisService.set(cacheKey, JSON.stringify(response), 'EX', business_constants_1.CACHE_TTL_KPI);
-        return response;
+        if (resolution.periodIds.length === 0) {
+            return [];
+        }
+        if (resolution.mode === 'single') {
+            const targetPeriodId = resolution.periodIds[0];
+            const cacheKey = this.buildCacheKey(currentUser.org_id, targetPeriodId, scenarioId);
+            const cached = await this.redisService.get(cacheKey);
+            if (cached) {
+                return JSON.parse(cached);
+            }
+            const values = await this.prisma.kpiValue.findMany({
+                where: {
+                    org_id: currentUser.org_id,
+                    period_id: targetPeriodId,
+                    ...(scenarioId ? { scenario_id: scenarioId } : { scenario_id: null }),
+                    kpi: { is_active: true },
+                },
+                include: { kpi: true },
+                orderBy: [{ severity: 'desc' }, { calculated_at: 'desc' }],
+            });
+            const response = values.map((value) => this.toValueResponse(value));
+            await this.redisService.set(cacheKey, JSON.stringify(response), 'EX', business_constants_1.CACHE_TTL_KPI);
+            return response;
+        }
+        return this.getValuesAggregated(currentUser, resolution.periodIds, resolution.virtualPeriodId);
     }
     async getTrend(currentUser, kpiCode, fiscalYearId) {
         const periods = await this.prisma.period.findMany({
@@ -183,6 +195,132 @@ let KpisService = KpisService_1 = class KpisService {
         await this.invalidateCacheForPeriod(orgId, periodId);
         this.logger.log(`KPIs calculés - org: ${orgId}, period: ${periodId}, codes: [${calculatedCodes.join(', ')}]`);
         return { calculated: calculatedCodes.length, kpis: calculatedCodes };
+    }
+    async getValuesAggregated(currentUser, periodIds, virtualPeriodId) {
+        if (periodIds.length === 0)
+            return [];
+        const additive = new Set(['CA', 'EBITDA', 'CHARGES', 'OPEX']);
+        const values = await this.prisma.kpiValue.findMany({
+            where: {
+                org_id: currentUser.org_id,
+                period_id: { in: periodIds },
+                scenario_id: null,
+                kpi: { is_active: true },
+            },
+            include: { kpi: true },
+            orderBy: { calculated_at: 'asc' },
+        });
+        const byCode = new Map();
+        for (const v of values) {
+            const arr = byCode.get(v.kpi.code) ?? [];
+            arr.push(v);
+            byCode.set(v.kpi.code, arr);
+        }
+        const result = [];
+        for (const [code, kpiVals] of byCode.entries()) {
+            const latest = kpiVals[kpiVals.length - 1];
+            const aggregatedValue = additive.has(code)
+                ? kpiVals.reduce((s, v) => s.plus(v.value), new client_1.Prisma.Decimal(0))
+                : latest.value;
+            const severity = this.computeKpiSeverity(latest.kpi, aggregatedValue.toNumber());
+            result.push({
+                kpi_id: latest.kpi_id,
+                kpi_code: code,
+                kpi_label: latest.kpi.label,
+                unit: latest.kpi.unit,
+                period_id: virtualPeriodId,
+                scenario_id: null,
+                value: aggregatedValue.toDecimalPlaces(2).toString(),
+                severity,
+                calculated_at: latest.calculated_at,
+            });
+        }
+        const caEntry = result.find((r) => r.kpi_code === 'CA');
+        const ebitdaEntry = result.find((r) => r.kpi_code === 'EBITDA');
+        const margeEntry = result.find((r) => r.kpi_code === 'MARGE_EBITDA' || r.kpi_code === 'MARGE');
+        if (caEntry && ebitdaEntry && margeEntry) {
+            const caDecimal = new client_1.Prisma.Decimal(caEntry.value);
+            if (!caDecimal.eq(0)) {
+                const newMarge = new client_1.Prisma.Decimal(ebitdaEntry.value)
+                    .div(caDecimal)
+                    .mul(100)
+                    .toDecimalPlaces(2)
+                    .toString();
+                margeEntry.value = newMarge;
+                const margeKpiVals = byCode.get(margeEntry.kpi_code);
+                if (margeKpiVals?.length) {
+                    margeEntry.severity = this.computeKpiSeverity(margeKpiVals[0].kpi, Number(newMarge));
+                }
+            }
+        }
+        return result.sort((a, b) => {
+            const rank = { CRITICAL: 3, WARN: 2, INFO: 1 };
+            return (rank[b.severity] ?? 0) - (rank[a.severity] ?? 0);
+        });
+    }
+    async resolvePeriodIds(orgId, params) {
+        if (params.periodId) {
+            return { periodIds: [params.periodId], mode: 'single', virtualPeriodId: params.periodId };
+        }
+        const activePeriod = await this.prisma.period.findFirst({
+            where: { org_id: orgId, status: client_1.PeriodStatus.OPEN },
+            select: { fiscal_year_id: true },
+            orderBy: { period_number: 'desc' },
+        });
+        const fiscalYearId = activePeriod?.fiscal_year_id;
+        if (!fiscalYearId) {
+            return { periodIds: [], mode: 'aggregate', virtualPeriodId: 'AGG' };
+        }
+        if (params.ytd) {
+            const currentMonth = new Date().getMonth() + 1;
+            const periods = await this.prisma.period.findMany({
+                where: { org_id: orgId, fiscal_year_id: fiscalYearId, period_number: { lte: currentMonth } },
+                select: { id: true },
+                orderBy: { period_number: 'asc' },
+            });
+            return { periodIds: periods.map((p) => p.id), mode: 'aggregate', virtualPeriodId: 'YTD' };
+        }
+        if (params.quarter && params.quarter >= 1 && params.quarter <= 4) {
+            const start = (params.quarter - 1) * 3 + 1;
+            const end = start + 2;
+            const periods = await this.prisma.period.findMany({
+                where: { org_id: orgId, fiscal_year_id: fiscalYearId, period_number: { gte: start, lte: end } },
+                select: { id: true },
+                orderBy: { period_number: 'asc' },
+            });
+            return { periodIds: periods.map((p) => p.id), mode: 'aggregate', virtualPeriodId: `Q${params.quarter}` };
+        }
+        if (params.fromPeriod && params.toPeriod) {
+            const bounds = await this.prisma.period.findMany({
+                where: {
+                    org_id: orgId,
+                    id: { in: [params.fromPeriod, params.toPeriod] },
+                    fiscal_year_id: fiscalYearId,
+                },
+                select: { id: true, period_number: true },
+            });
+            if (bounds.length < 2) {
+                return { periodIds: [], mode: 'aggregate', virtualPeriodId: 'CUSTOM' };
+            }
+            const from = bounds.find((b) => b.id === params.fromPeriod);
+            const to = bounds.find((b) => b.id === params.toPeriod);
+            if (!from || !to) {
+                return { periodIds: [], mode: 'aggregate', virtualPeriodId: 'CUSTOM' };
+            }
+            const min = Math.min(from.period_number, to.period_number);
+            const max = Math.max(from.period_number, to.period_number);
+            const periods = await this.prisma.period.findMany({
+                where: { org_id: orgId, fiscal_year_id: fiscalYearId, period_number: { gte: min, lte: max } },
+                select: { id: true },
+                orderBy: { period_number: 'asc' },
+            });
+            return {
+                periodIds: periods.map((p) => p.id),
+                mode: 'aggregate',
+                virtualPeriodId: `CUSTOM:${params.fromPeriod}:${params.toPeriod}`,
+            };
+        }
+        return { periodIds: [], mode: 'aggregate', virtualPeriodId: 'AGG' };
     }
     async seedDefaultKpis(orgId) {
         const defaults = [

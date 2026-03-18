@@ -1,45 +1,17 @@
 import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import apiClient from '../../api/client';
+import { z } from 'zod';
+import apiClient, { unwrapApiData } from '../../api/client';
 import { formatFCFA } from '../../utils/currency';
 import { formatDate } from '../../utils/date';
 import { usePeriodStore } from '../../stores/period.store';
-
-type CashFlowWeek = {
-  week: number;
-  inflows: string;
-  outflows: string;
-};
-
-type CashFlowData = {
-  weekly: CashFlowWeek[];
-  total_inflows: string;
-  total_outflows: string;
-  runway_weeks: number;
-  entries_count: number;
-};
-
-type PlannedFlow = {
-  id: string;
-  planned_date: string | null;
-  flow_type: string;
-  direction: 'IN' | 'OUT';
-  amount: string;
-  label: string;
-};
-
-type BankAccount = {
-  id: string;
-  name: string;
-  bank_name: string | null;
-  account_name: string | null;
-  account_number: string | null;
-  account_type: 'BANK' | 'WAVE' | 'ORANGE_MONEY' | 'MTN_MOMO';
-  balance: string;
-  current_balance: string;
-  currency: string;
-  is_active: boolean;
-};
+import {
+  bankAccountSchema,
+  cashFlowDataSchema,
+  parseFinancialPayload,
+  plannedFlowSchema,
+  type BankAccount,
+} from '../../contracts/financial.schemas';
 
 type FlowType =
   | 'ENCAISSEMENT_CLIENT'
@@ -61,13 +33,6 @@ const FLOW_TYPES: Array<{ value: FlowType; label: string }> = [
   { value: 'AUTRE_ENTREE', label: 'Autre encaissement' },
   { value: 'AUTRE_SORTIE', label: 'Autre decaissement' },
 ];
-
-function unwrapEnvelope<T>(payload: any): T {
-  if (payload && typeof payload === 'object' && 'data' in payload && 'success' in payload) {
-    return payload.data as T;
-  }
-  return payload as T;
-}
 
 function deriveDirection(flowType: FlowType): 'IN' | 'OUT' {
   if (flowType === 'ENCAISSEMENT_CLIENT' || flowType === 'AUTRE_ENTREE' || flowType === 'FINANCEMENT') {
@@ -343,7 +308,10 @@ function BankAccountsModal({ onClose }: { onClose: () => void }) {
 
   const accountsQuery = useQuery({
     queryKey: ['bank-accounts'],
-    queryFn: () => apiClient.get('/bank-accounts').then((r) => unwrapEnvelope<BankAccount[]>(r.data)),
+    queryFn: () =>
+      apiClient
+        .get('/bank-accounts')
+        .then((r) => parseFinancialPayload(z.array(bankAccountSchema), unwrapApiData(r), 'bank-accounts')),
   });
 
   const createMutation = useMutation({
@@ -494,23 +462,46 @@ export default function CashFlowPage() {
   const queryClient = useQueryClient();
   const [showEntryModal, setShowEntryModal] = useState(false);
   const [showBankModal, setShowBankModal] = useState(false);
-  const currentPeriodId = usePeriodStore((state) => state.currentPeriodId);
+  const { mode, quarterNumber, customFrom, customTo, currentPeriodId } = usePeriodStore();
+
+  const getPeriodParams = () => {
+    if (mode === 'ytd') return { ytd: true };
+    if (mode === 'quarter') return { quarter: quarterNumber ?? undefined };
+    if (mode === 'custom') return { from_period: customFrom ?? undefined, to_period: customTo ?? undefined };
+    return { period_id: currentPeriodId };
+  };
 
   const { data: cashFlowData } = useQuery({
-    queryKey: ['cashflow', currentPeriodId],
-    queryFn: () => apiClient.get('/cash-flow', { params: { period_id: currentPeriodId } }).then((r) => unwrapEnvelope<CashFlowData>(r.data)),
-    enabled: !!currentPeriodId,
+    queryKey: ['cashflow', mode, quarterNumber, customFrom, customTo, currentPeriodId],
+    queryFn: () =>
+      apiClient
+        .get('/cash-flow', { params: getPeriodParams() })
+        .then((r) => parseFinancialPayload(cashFlowDataSchema, unwrapApiData(r), 'cash-flow')),
+    enabled:
+      mode === 'ytd' ||
+      (mode === 'quarter' && quarterNumber != null) ||
+      (mode === 'custom' && !!customFrom && !!customTo) ||
+      (!!currentPeriodId && mode === 'single'),
   });
-
   const { data: bankAccounts } = useQuery({
     queryKey: ['bank-accounts'],
-    queryFn: () => apiClient.get('/bank-accounts').then((r) => unwrapEnvelope<BankAccount[]>(r.data)),
+    queryFn: () =>
+      apiClient
+        .get('/bank-accounts')
+        .then((r) => parseFinancialPayload(z.array(bankAccountSchema), unwrapApiData(r), 'bank-accounts')),
   });
 
   const { data: plans } = useQuery({
-    queryKey: ['cashflow-plans', currentPeriodId],
-    queryFn: () => apiClient.get('/cash-flow/plans', { params: { period_id: currentPeriodId } }).then((r) => unwrapEnvelope<PlannedFlow[]>(r.data)),
-    enabled: !!currentPeriodId,
+    queryKey: ['cashflow-plans', mode, quarterNumber, customFrom, customTo, currentPeriodId],
+    queryFn: () =>
+      apiClient
+        .get('/cash-flow/plans', { params: getPeriodParams() })
+        .then((r) => parseFinancialPayload(z.array(plannedFlowSchema), unwrapApiData(r), 'cash-flow/plans')),
+    enabled:
+      mode === 'ytd' ||
+      (mode === 'quarter' && quarterNumber != null) ||
+      (mode === 'custom' && !!customFrom && !!customTo) ||
+      (!!currentPeriodId && mode === 'single'),
   });
 
   const deletePlan = useMutation({

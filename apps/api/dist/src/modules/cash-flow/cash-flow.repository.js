@@ -101,6 +101,7 @@ let CashFlowRepository = class CashFlowRepository extends base_repository_1.Base
             where: {
                 org_id: params.org_id,
                 ...(params.period_id ? { period_id: params.period_id } : {}),
+                ...(params.period_ids && params.period_ids.length > 0 ? { period_id: { in: params.period_ids } } : {}),
                 ...(params.fiscal_year_id
                     ? {
                         period: {
@@ -149,6 +150,30 @@ let CashFlowRepository = class CashFlowRepository extends base_repository_1.Base
                 period_id: periodId,
                 week_number: weekNumber,
             },
+        });
+    }
+    async findActivePeriod(orgId) {
+        return this.prisma.period.findFirst({
+            where: { org_id: orgId, status: 'OPEN' },
+            select: { fiscal_year_id: true },
+            orderBy: { period_number: 'desc' },
+        });
+    }
+    async findPeriodsByRange(orgId, fiscalYearId, startPeriodNumber, endPeriodNumber) {
+        return this.prisma.period.findMany({
+            where: {
+                org_id: orgId,
+                fiscal_year_id: fiscalYearId,
+                period_number: { gte: startPeriodNumber, lte: endPeriodNumber },
+            },
+            select: { id: true },
+            orderBy: { period_number: 'asc' },
+        });
+    }
+    async findPeriodDetails(periodId, orgId) {
+        return this.prisma.period.findFirst({
+            where: { id: periodId, org_id: orgId },
+            select: { fiscal_year_id: true, period_number: true },
         });
     }
     async totalActiveCash(orgId) {

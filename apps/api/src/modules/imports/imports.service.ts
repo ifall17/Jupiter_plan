@@ -1,12 +1,47 @@
 import { BadRequestException, Injectable, Logger, NotFoundException, UnauthorizedException } from '@nestjs/common';
+import { randomUUID } from 'crypto';
 import { ImportSource, ImportStatus, LineType, Prisma, UserRole } from '@prisma/client';
+import { AuditAction } from '@shared/enums';
 import * as XLSX from 'xlsx';
+import { AuditService } from '../../common/services/audit.service';
 import { PrismaService } from '../../prisma/prisma.service';
 
 export interface ImportsCurrentUser {
   sub: string;
   org_id: string;
   role: UserRole;
+}
+
+export const MAX_IMPORT_FILE_SIZE_BYTES = 10 * 1024 * 1024;
+
+const ALLOWED_IMPORT_MIME_TYPES = new Set([
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+]);
+
+type ImportErrorCode =
+  | 'IMPORT_FILE_REQUIRED'
+  | 'IMPORT_FILE_TYPE_INVALID'
+  | 'IMPORT_FILE_SIGNATURE_INVALID'
+  | 'IMPORT_FILE_TOO_LARGE'
+  | 'IMPORT_PERIOD_UNAUTHORIZED'
+  | 'IMPORT_WORKBOOK_EMPTY'
+  | 'IMPORT_PROCESSING_FAILED';
+
+function importBadRequest(code: ImportErrorCode, message: string, details?: Record<string, unknown>): BadRequestException {
+  return new BadRequestException({ code, message, ...(details ? { details } : {}) });
+}
+
+function isAllowedImportMimeType(mimetype: string | undefined): boolean {
+  return typeof mimetype === 'string' && ALLOWED_IMPORT_MIME_TYPES.has(mimetype);
+}
+
+function hasXlsxZipSignature(buffer: Buffer): boolean {
+  if (buffer.length < 4) {
+    return false;
+  }
+
+  const signature = buffer.subarray(0, 4).toString('hex').toUpperCase();
+  return signature === '504B0304' || signature === '504B0506' || signature === '504B0708';
 }
 
 function normalizeHeader(value: unknown): string {
@@ -18,17 +53,49 @@ function normalizeHeader(value: unknown): string {
     .replace(/[^a-z0-9]/g, '');
 }
 
-function readAmount(value: unknown): number {
-  if (typeof value === 'number') {
-    return value;
+function normalizeAmountString(value: unknown): string {
+  const raw = String(value ?? '')
+    .trim()
+    .replace(/\s/g, '')
+    .replace(/[A-Za-z$€£¥₣]/g, '')
+    .replace(/'/g, '');
+
+  if (!raw) {
+    return '';
   }
 
-  const normalized = String(value ?? '')
-    .replace(/\s/g, '')
-    .replace(/,/g, '.')
-    .replace(/[A-Za-z$€£¥₣]/g, '');
+  const lastComma = raw.lastIndexOf(',');
+  const lastDot = raw.lastIndexOf('.');
 
-  return Number.parseFloat(normalized);
+  if (lastComma !== -1 && lastDot !== -1) {
+    if (lastComma > lastDot) {
+      return raw.replace(/\./g, '').replace(/,/g, '.');
+    }
+    return raw.replace(/,/g, '');
+  }
+
+  if (lastComma !== -1) {
+    return raw.replace(/,/g, '.');
+  }
+
+  return raw;
+}
+
+function readAmount(value: unknown): Prisma.Decimal | null {
+  const normalized = normalizeAmountString(value);
+  if (!normalized || !/^-?\d+(\.\d+)?$/.test(normalized)) {
+    return null;
+  }
+
+  try {
+    return new Prisma.Decimal(normalized);
+  } catch {
+    return null;
+  }
+}
+
+function buildServerFileName(): string {
+  return `import_${randomUUID()}.xlsx`;
 }
 
 function parseLineType(raw: string): LineType | null {
@@ -46,17 +113,33 @@ function parseLineType(raw: string): LineType | null {
 export class ImportsService {
   private readonly logger = new Logger(ImportsService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly auditService: AuditService,
+  ) {}
 
-  async processImport(file: Express.Multer.File, periodId: string, orgId: string, createdBy: string) {
+  async processImport(
+    file: Express.Multer.File,
+    periodId: string,
+    orgId: string,
+    createdBy: string,
+    ipAddress?: string,
+  ) {
     if (!file) {
-      throw new BadRequestException('File is required');
+      throw importBadRequest('IMPORT_FILE_REQUIRED', 'File is required');
     }
-    if (!file.originalname.toLowerCase().endsWith('.xlsx')) {
-      throw new BadRequestException('Only .xlsx files are supported');
+    if (!isAllowedImportMimeType(file.mimetype)) {
+      throw importBadRequest('IMPORT_FILE_TYPE_INVALID', 'Only .xlsx MIME types are supported', {
+        mimetype: file.mimetype ?? null,
+      });
     }
-    if (file.size > 10 * 1024 * 1024) {
-      throw new BadRequestException('File too large');
+    if (!hasXlsxZipSignature(file.buffer)) {
+      throw importBadRequest('IMPORT_FILE_SIGNATURE_INVALID', 'The uploaded file is not a valid .xlsx archive');
+    }
+    if (file.size > MAX_IMPORT_FILE_SIZE_BYTES) {
+      throw importBadRequest('IMPORT_FILE_TOO_LARGE', 'File too large', {
+        max_bytes: MAX_IMPORT_FILE_SIZE_BYTES,
+      });
     }
 
     const period = await this.prisma.period.findFirst({
@@ -64,8 +147,13 @@ export class ImportsService {
       select: { id: true },
     });
     if (!period) {
-      throw new UnauthorizedException();
+      throw new UnauthorizedException({
+        code: 'IMPORT_PERIOD_UNAUTHORIZED',
+        message: 'The selected period is not accessible for this organization',
+      });
     }
+
+    const safeFileName = buildServerFileName();
 
     const job = await this.prisma.importJob.create({
       data: {
@@ -74,9 +162,24 @@ export class ImportsService {
         created_by: createdBy,
         source: ImportSource.EXCEL,
         status: ImportStatus.PENDING,
-        file_name: file.originalname,
+        file_name: safeFileName,
         file_size_kb: Math.max(1, Math.round(file.size / 1024)),
         started_at: new Date(),
+      },
+    });
+
+    await this.safeCreateAuditLog({
+      org_id: orgId,
+      user_id: createdBy,
+      action: AuditAction.IMPORT_START,
+      entity_type: 'import_job',
+      entity_id: job.id,
+      ip_address: ipAddress,
+      metadata: {
+        source: ImportSource.EXCEL,
+        file_name: safeFileName,
+        file_size_kb: Math.max(1, Math.round(file.size / 1024)),
+        mimetype: file.mimetype ?? null,
       },
     });
 
@@ -90,18 +193,28 @@ export class ImportsService {
       const sheetName = workbook.SheetNames[0];
       const sheet = sheetName ? workbook.Sheets[sheetName] : undefined;
       if (!sheet) {
-        throw new BadRequestException('Workbook is empty');
+        throw importBadRequest('IMPORT_WORKBOOK_EMPTY', 'Workbook is empty');
       }
 
-      const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: '' });
+      const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: '', raw: false });
       if (!rows.length) {
         await this.prisma.importJob.update({
           where: { id: job.id },
           data: {
             status: ImportStatus.FAILED,
-            error_report: { message: 'Fichier vide ou format invalide' },
+            error_report: { code: 'IMPORT_WORKBOOK_EMPTY', message: 'Fichier vide ou format invalide' },
             completed_at: new Date(),
           },
+        });
+
+        await this.safeCreateAuditLog({
+          org_id: orgId,
+          user_id: createdBy,
+          action: AuditAction.IMPORT_DONE,
+          entity_type: 'import_job',
+          entity_id: job.id,
+          ip_address: ipAddress,
+          metadata: { status: ImportStatus.FAILED, reason: 'IMPORT_WORKBOOK_EMPTY' },
         });
 
         return {
@@ -109,7 +222,7 @@ export class ImportsService {
           status: ImportStatus.FAILED,
           rows_inserted: 0,
           rows_skipped: 0,
-          error_report: { message: 'Fichier vide ou format invalide' },
+          error_report: { code: 'IMPORT_WORKBOOK_EMPTY', message: 'Fichier vide ou format invalide' },
         };
       }
 
@@ -149,7 +262,7 @@ export class ImportsService {
         }
 
         const parsedAmount = readAmount(amountValue);
-        if (!Number.isFinite(parsedAmount) || parsedAmount <= 0) {
+        if (!parsedAmount || parsedAmount.lte(0)) {
           rowsSkipped += 1;
           errors.push({ row: rowNumber, error: 'INVALID_AMOUNT', value: String(amountValue ?? '') });
           continue;
@@ -163,9 +276,8 @@ export class ImportsService {
         }
 
         const lineType = detectedLineType;
-        const absoluteAmount = Math.abs(parsedAmount);
-
-        const signedAmount = lineType === LineType.EXPENSE ? -absoluteAmount : absoluteAmount;
+        const absoluteAmount = parsedAmount.abs();
+        const signedAmount = lineType === LineType.EXPENSE ? absoluteAmount.negated() : absoluteAmount;
         const transactionDate = transactionDateRaw instanceof Date ? transactionDateRaw : new Date(String(transactionDateRaw));
 
         transactions.push({
@@ -174,7 +286,7 @@ export class ImportsService {
           account_code: accountCode,
           account_label: label,
           department,
-          amount: new Prisma.Decimal(signedAmount.toFixed(2)),
+          amount: signedAmount.toDecimalPlaces(2),
           import_job_id: job.id,
           created_at: Number.isNaN(transactionDate.getTime()) ? new Date() : transactionDate,
         });
@@ -206,6 +318,21 @@ export class ImportsService {
         },
       });
 
+      await this.safeCreateAuditLog({
+        org_id: orgId,
+        user_id: createdBy,
+        action: AuditAction.IMPORT_DONE,
+        entity_type: 'import_job',
+        entity_id: completedJob.id,
+        ip_address: ipAddress,
+        metadata: {
+          status: completedJob.status,
+          rows_inserted: completedJob.rows_inserted ?? 0,
+          rows_skipped: completedJob.rows_skipped ?? 0,
+          has_errors: errors.length > 0,
+        },
+      });
+
       return {
         job_id: completedJob.id,
         status: completedJob.status,
@@ -218,8 +345,24 @@ export class ImportsService {
         where: { id: job.id },
         data: {
           status: ImportStatus.FAILED,
-          error_report: { message: 'Erreur de traitement du fichier' },
+          error_report: {
+            code: 'IMPORT_PROCESSING_FAILED',
+            message: 'Erreur de traitement du fichier',
+          },
           completed_at: new Date(),
+        },
+      });
+
+      await this.safeCreateAuditLog({
+        org_id: orgId,
+        user_id: createdBy,
+        action: AuditAction.IMPORT_DONE,
+        entity_type: 'import_job',
+        entity_id: job.id,
+        ip_address: ipAddress,
+        metadata: {
+          status: ImportStatus.FAILED,
+          error_code: error instanceof BadRequestException ? 'IMPORT_PROCESSING_FAILED' : 'IMPORT_PROCESSING_FAILED',
         },
       });
 
@@ -230,7 +373,7 @@ export class ImportsService {
 
   async upload(file: Express.Multer.File | undefined, periodId: string, currentUser: ImportsCurrentUser) {
     if (!file) {
-      throw new BadRequestException('File is required');
+      throw importBadRequest('IMPORT_FILE_REQUIRED', 'File is required');
     }
 
     return this.processImport(file, periodId, currentUser.org_id, currentUser.sub);
@@ -257,5 +400,24 @@ export class ImportsService {
     }
 
     return job;
+  }
+
+  private async safeCreateAuditLog(params: {
+    org_id: string;
+    user_id?: string;
+    action: AuditAction;
+    entity_type: string;
+    entity_id?: string;
+    ip_address?: string;
+    metadata?: Record<string, unknown>;
+  }): Promise<void> {
+    try {
+      await this.auditService.createLog(params);
+    } catch (error) {
+      this.logger.warn(
+        `Failed to persist audit log ${params.action} for ${params.entity_type}:${params.entity_id ?? 'n/a'}`,
+      );
+      this.logger.debug(error instanceof Error ? error.message : 'Unknown audit log error');
+    }
   }
 }

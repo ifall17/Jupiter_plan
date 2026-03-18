@@ -3,7 +3,8 @@ uvicorn
 sqlalchemy
 asyncpg
 pandas
-openpyxl
+openpyxl>=3.1.0
+fpdf2>=2.7.0
 boto3
 redis
 pydantic

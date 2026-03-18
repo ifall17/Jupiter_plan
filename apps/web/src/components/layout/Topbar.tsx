@@ -33,8 +33,24 @@ export default function Topbar(): JSX.Element {
   const setOrg = useOrgStore((state) => state.setOrg);
   const [openAlerts, setOpenAlerts] = useState<boolean>(false);
   const [openProfile, setOpenProfile] = useState<boolean>(false);
+  const [showPeriodMenu, setShowPeriodMenu] = useState<boolean>(false);
+  const [showCustomModal, setShowCustomModal] = useState<boolean>(false);
+  const [customFromDraft, setCustomFromDraft] = useState<string>('');
+  const [customToDraft, setCustomToDraft] = useState<string>('');
   const profileRef = useRef<HTMLDivElement | null>(null);
-  const { currentPeriod, setPeriod, isYTD, setYTD } = usePeriodStore();
+  const periodRef = useRef<HTMLDivElement | null>(null);
+  const {
+    mode,
+    quarterNumber,
+    currentPeriod,
+    setPeriod,
+    setYTD,
+    setQuarter,
+    setCustomRange,
+    getLabel,
+    customFrom,
+    customTo,
+  } = usePeriodStore();
   const currentMonthLabel = new Date().toLocaleDateString('fr-FR', { month: 'short' });
 
   const periodsQuery = useQuery({
@@ -56,6 +72,7 @@ export default function Topbar(): JSX.Element {
   });
 
   const alerts = alertsQuery.data ?? [];
+  const periods = periodsQuery.data ?? [];
   const fullName = user ? `${user.first_name} ${user.last_name}` : 'Utilisateur';
 
   useEffect(() => {
@@ -64,14 +81,27 @@ export default function Topbar(): JSX.Element {
     }
 
     const open = periodsQuery.data.find((period) => period.status === 'OPEN') ?? periodsQuery.data[0];
-    setPeriod({ id: open.id, label: open.label, status: open.status });
+    usePeriodStore.setState({
+      currentPeriod: { id: open.id, label: open.label, status: open.status },
+      currentPeriodId: open.id,
+    });
     setOrg({ currentPeriod: open.id });
-  }, [currentPeriod, periodsQuery.data, setOrg, setPeriod]);
+  }, [currentPeriod, periodsQuery.data, setOrg]);
+
+  useEffect(() => {
+    if (showCustomModal) {
+      setCustomFromDraft(customFrom ?? '');
+      setCustomToDraft(customTo ?? '');
+    }
+  }, [customFrom, customTo, showCustomModal]);
 
   useEffect(() => {
     const handler = (event: MouseEvent) => {
       if (!profileRef.current?.contains(event.target as Node)) {
         setOpenProfile(false);
+      }
+      if (!periodRef.current?.contains(event.target as Node)) {
+        setShowPeriodMenu(false);
       }
     };
 
@@ -88,31 +118,353 @@ export default function Topbar(): JSX.Element {
         </div>
 
         <div className="topbar-actions">
-          <select
-            className="text-sm topbar-period-select"
-            value={isYTD ? 'YTD' : currentPeriod?.id ?? ''}
-            onChange={(event) => {
-              if (event.target.value === 'YTD') {
-                setYTD(true);
-                return;
-              }
+          <div ref={periodRef} style={{ position: 'relative' }}>
+            <button
+              type="button"
+              onClick={() => setShowPeriodMenu((v) => !v)}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 6,
+                padding: '6px 14px',
+                borderRadius: 20,
+                border: '1px solid rgba(184,150,62,0.25)',
+                background: 'var(--gold-lt)',
+                fontSize: 12,
+                fontWeight: 600,
+                color: 'var(--gold)',
+                cursor: 'pointer',
+              }}
+            >
+              📅 {getLabel()} ▾
+            </button>
 
-              const selected = (periodsQuery.data ?? []).find((period) => period.id === event.target.value);
-              if (!selected) {
-                return;
-              }
-              setPeriod({ id: selected.id, label: selected.label, status: selected.status });
-              setOrg({ currentPeriod: selected.id });
-            }}
-          >
-            <option value="YTD">Periode courante (Jan → {currentMonthLabel})</option>
-            <option disabled>--------------</option>
-            {(periodsQuery.data ?? []).map((period) => (
-              <option key={period.id} value={period.id}>
-                {period.label || formatDate(period.start_date, 'month-year')}
-              </option>
-            ))}
-          </select>
+            {showPeriodMenu ? (
+              <div
+                style={{
+                  position: 'absolute',
+                  top: 'calc(100% + 8px)',
+                  right: 0,
+                  zIndex: 300,
+                  background: 'var(--surface)',
+                  border: '1px solid var(--border)',
+                  borderRadius: 12,
+                  boxShadow: 'var(--shadow-md)',
+                  minWidth: 220,
+                  padding: 6,
+                  maxHeight: 400,
+                  overflowY: 'auto',
+                }}
+              >
+                <button
+                  type="button"
+                  onClick={() => {
+                    setYTD();
+                    setShowPeriodMenu(false);
+                  }}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 8,
+                    width: '100%',
+                    padding: '9px 14px',
+                    borderRadius: 8,
+                    border: 'none',
+                    cursor: 'pointer',
+                    fontSize: 13,
+                    fontWeight: mode === 'ytd' ? 700 : 500,
+                    background: mode === 'ytd' ? 'var(--gold-lt)' : 'transparent',
+                    color: mode === 'ytd' ? 'var(--gold)' : 'var(--text-hi)',
+                    textAlign: 'left',
+                  }}
+                >
+                  📊 Période courante (YTD)
+                  <span style={{ fontSize: 10, color: 'var(--text-lo)', marginLeft: 'auto' }}>
+                    Jan → {currentMonthLabel}
+                  </span>
+                </button>
+
+                <div
+                  style={{
+                    padding: '6px 14px 2px',
+                    fontSize: 9,
+                    fontWeight: 700,
+                    letterSpacing: '0.15em',
+                    textTransform: 'uppercase',
+                    color: 'var(--text-lo)',
+                  }}
+                >
+                  TRIMESTRES
+                </div>
+
+                {[
+                  { q: 1, label: 'T1', months: 'Jan → Mar' },
+                  { q: 2, label: 'T2', months: 'Avr → Jun' },
+                  { q: 3, label: 'T3', months: 'Jul → Sep' },
+                  { q: 4, label: 'T4', months: 'Oct → Déc' },
+                ].map(({ q, label, months }) => (
+                  <button
+                    key={q}
+                    type="button"
+                    onClick={() => {
+                      setQuarter(q);
+                      setShowPeriodMenu(false);
+                    }}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 8,
+                      width: '100%',
+                      padding: '9px 14px',
+                      borderRadius: 8,
+                      border: 'none',
+                      cursor: 'pointer',
+                      fontSize: 13,
+                      fontWeight: mode === 'quarter' && quarterNumber === q ? 700 : 500,
+                      background: mode === 'quarter' && quarterNumber === q ? 'var(--indigo-lt)' : 'transparent',
+                      color: mode === 'quarter' && quarterNumber === q ? 'var(--indigo)' : 'var(--text-hi)',
+                      textAlign: 'left',
+                    }}
+                  >
+                    {label}
+                    <span style={{ fontSize: 10, color: 'var(--text-lo)', marginLeft: 'auto' }}>{months}</span>
+                  </button>
+                ))}
+
+                <div
+                  style={{
+                    padding: '6px 14px 2px',
+                    fontSize: 9,
+                    fontWeight: 700,
+                    letterSpacing: '0.15em',
+                    textTransform: 'uppercase',
+                    color: 'var(--text-lo)',
+                  }}
+                >
+                  PLAGE PERSONNALISEE
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowPeriodMenu(false);
+                    setShowCustomModal(true);
+                  }}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 8,
+                    width: '100%',
+                    padding: '9px 14px',
+                    borderRadius: 8,
+                    border: 'none',
+                    cursor: 'pointer',
+                    fontSize: 13,
+                    fontWeight: 500,
+                    background: mode === 'custom' ? 'var(--terra-lt)' : 'transparent',
+                    color: mode === 'custom' ? 'var(--terra)' : 'var(--text-hi)',
+                    textAlign: 'left',
+                  }}
+                >
+                  📅 Definir une plage...
+                </button>
+
+                <div
+                  style={{
+                    margin: '4px 0',
+                    borderTop: '1px solid var(--border)',
+                    padding: '6px 14px 2px',
+                    fontSize: 9,
+                    fontWeight: 700,
+                    letterSpacing: '0.15em',
+                    textTransform: 'uppercase',
+                    color: 'var(--text-lo)',
+                  }}
+                >
+                  MOIS
+                </div>
+
+                {periods.map((period) => (
+                  <button
+                    key={period.id}
+                    type="button"
+                    onClick={() => {
+                      setPeriod({ id: period.id, label: period.label, status: period.status });
+                      setOrg({ currentPeriod: period.id });
+                      setShowPeriodMenu(false);
+                    }}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      width: '100%',
+                      padding: '8px 14px',
+                      borderRadius: 8,
+                      border: 'none',
+                      cursor: 'pointer',
+                      fontSize: 12,
+                      fontWeight: mode === 'single' && currentPeriod?.id === period.id ? 700 : 400,
+                      background: mode === 'single' && currentPeriod?.id === period.id ? 'var(--surface2)' : 'transparent',
+                      color: 'var(--text-hi)',
+                      textAlign: 'left',
+                    }}
+                  >
+                    {period.label || formatDate(period.start_date, 'month-year')}
+                    {period.status === 'OPEN' ? (
+                      <span
+                        style={{
+                          marginLeft: 'auto',
+                          fontSize: 9,
+                          fontWeight: 700,
+                          color: 'var(--kola)',
+                          background: 'var(--kola-lt)',
+                          padding: '1px 6px',
+                          borderRadius: 10,
+                        }}
+                      >
+                        EN COURS
+                      </span>
+                    ) : null}
+                  </button>
+                ))}
+              </div>
+            ) : null}
+          </div>
+
+          {showCustomModal ? (
+            <div
+              style={{
+                position: 'fixed',
+                inset: 0,
+                background: 'rgba(26,26,46,0.4)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                zIndex: 400,
+              }}
+            >
+              <div
+                style={{
+                  background: 'var(--surface)',
+                  borderRadius: 16,
+                  padding: 32,
+                  width: 400,
+                  boxShadow: 'var(--shadow-md)',
+                }}
+              >
+                <h2 style={{ fontFamily: 'var(--font-serif)', fontSize: 20, color: 'var(--ink)', marginBottom: 24 }}>
+                  Plage personnalisee
+                </h2>
+
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 24 }}>
+                  <div>
+                    <label
+                      style={{
+                        fontSize: 12,
+                        fontWeight: 600,
+                        color: 'var(--text-md)',
+                        display: 'block',
+                        marginBottom: 6,
+                      }}
+                    >
+                      De
+                    </label>
+                    <select
+                      value={customFromDraft}
+                      onChange={(event) => setCustomFromDraft(event.target.value)}
+                      style={{
+                        width: '100%',
+                        padding: '9px 12px',
+                        borderRadius: 8,
+                        border: '1px solid var(--border)',
+                        fontSize: 13,
+                        background: 'var(--surface)',
+                      }}
+                    >
+                      <option value="">Debut</option>
+                      {periods.map((period) => (
+                        <option key={period.id} value={period.id}>
+                          {period.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label
+                      style={{
+                        fontSize: 12,
+                        fontWeight: 600,
+                        color: 'var(--text-md)',
+                        display: 'block',
+                        marginBottom: 6,
+                      }}
+                    >
+                      A
+                    </label>
+                    <select
+                      value={customToDraft}
+                      onChange={(event) => setCustomToDraft(event.target.value)}
+                      style={{
+                        width: '100%',
+                        padding: '9px 12px',
+                        borderRadius: 8,
+                        border: '1px solid var(--border)',
+                        fontSize: 13,
+                        background: 'var(--surface)',
+                      }}
+                    >
+                      <option value="">Fin</option>
+                      {periods.map((period) => (
+                        <option key={period.id} value={period.id}>
+                          {period.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+                  <button
+                    type="button"
+                    onClick={() => setShowCustomModal(false)}
+                    style={{
+                      padding: '9px 20px',
+                      background: 'transparent',
+                      border: '1px solid var(--border)',
+                      borderRadius: 8,
+                      cursor: 'pointer',
+                      fontSize: 13,
+                      color: 'var(--text-md)',
+                    }}
+                  >
+                    Annuler
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (customFromDraft && customToDraft) {
+                        setCustomRange(customFromDraft, customToDraft);
+                        setShowCustomModal(false);
+                      }
+                    }}
+                    disabled={!customFromDraft || !customToDraft}
+                    style={{
+                      padding: '9px 20px',
+                      background: customFromDraft && customToDraft ? 'var(--terra)' : 'var(--text-lo)',
+                      color: 'white',
+                      border: 'none',
+                      borderRadius: 8,
+                      cursor: 'pointer',
+                      fontSize: 13,
+                      fontWeight: 600,
+                    }}
+                  >
+                    Appliquer
+                  </button>
+                </div>
+              </div>
+            </div>
+          ) : null}
 
           <div className="topbar-popover-wrap">
             <button type="button" className="topbar-icon-button" onClick={() => setOpenAlerts((v) => !v)}>

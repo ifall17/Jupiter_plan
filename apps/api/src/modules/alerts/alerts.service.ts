@@ -21,7 +21,10 @@ export class AlertsService {
     is_read?: boolean;
     severity?: AlertSeverity;
     period_id?: string;
-      ytd?: boolean;
+    ytd?: boolean;
+    quarter?: number;
+    from_period?: string;
+    to_period?: string;
     page?: number;
     limit?: number;
   }): Promise<PaginatedResponseDto<AlertResponseDto>> {
@@ -29,22 +32,27 @@ export class AlertsService {
     const limit = params.limit && params.limit > 0 ? Math.min(params.limit, 100) : 20;
     const skip = (page - 1) * limit;
 
-      let periodFilter: Record<string, unknown> = {};
-      if (params.ytd) {
-        const ytdIds = await this.resolveYTDPeriodIds(params.currentUser.org_id);
-        if (ytdIds.length > 0) {
-          periodFilter = { period_id: { in: ytdIds } };
-        }
-      } else if (params.period_id) {
-        periodFilter = { period_id: params.period_id };
-      }
+    const periodIds = await this.resolvePeriodIds(params.currentUser.org_id, {
+      period_id: params.period_id,
+      ytd: params.ytd,
+      quarter: params.quarter,
+      from_period: params.from_period,
+      to_period: params.to_period,
+    });
 
-      const where = {
-        org_id: params.currentUser.org_id,
-        ...(typeof params.is_read === 'boolean' ? { is_read: params.is_read } : {}),
-        ...(params.severity ? { severity: params.severity } : {}),
-        ...periodFilter,
-      };
+    const periodFilter =
+      periodIds.length > 0
+        ? { period_id: { in: periodIds } }
+        : params.period_id
+          ? { period_id: params.period_id }
+          : {};
+
+    const where = {
+      org_id: params.currentUser.org_id,
+      ...(typeof params.is_read === 'boolean' ? { is_read: params.is_read } : {}),
+      ...(params.severity ? { severity: params.severity } : {}),
+      ...periodFilter,
+    };
 
     const [alerts, total] = await this.prisma.$transaction([
       this.prisma.alert.findMany({
@@ -80,23 +88,78 @@ export class AlertsService {
     };
   }
 
-  private async resolveYTDPeriodIds(orgId: string): Promise<string[]> {
-    const currentMonth = new Date().getMonth() + 1;
+  private async resolvePeriodIds(
+    orgId: string,
+    params: {
+      period_id?: string;
+      ytd?: boolean;
+      quarter?: number;
+      from_period?: string;
+      to_period?: string;
+    },
+  ): Promise<string[]> {
+    if (params.period_id) {
+      return [params.period_id];
+    }
+
     const activePeriod = await this.prisma.period.findFirst({
       where: { org_id: orgId, status: PeriodStatus.OPEN },
       select: { fiscal_year_id: true },
       orderBy: { period_number: 'desc' },
     });
-    const periods = await this.prisma.period.findMany({
-      where: {
-        org_id: orgId,
-        ...(activePeriod ? { fiscal_year_id: activePeriod.fiscal_year_id } : {}),
-        period_number: { lte: currentMonth },
-      },
-      select: { id: true },
-      orderBy: { period_number: 'asc' },
-    });
-    return periods.map((p) => p.id);
+
+    const fiscalYearId = activePeriod?.fiscal_year_id;
+    if (!fiscalYearId) {
+      return [];
+    }
+
+    if (params.ytd) {
+      const currentMonth = new Date().getMonth() + 1;
+      const periods = await this.prisma.period.findMany({
+        where: { org_id: orgId, fiscal_year_id: fiscalYearId, period_number: { lte: currentMonth } },
+        select: { id: true },
+        orderBy: { period_number: 'asc' },
+      });
+      return periods.map((p) => p.id);
+    }
+
+    if (params.quarter && params.quarter >= 1 && params.quarter <= 4) {
+      const start = (params.quarter - 1) * 3 + 1;
+      const end = start + 2;
+      const periods = await this.prisma.period.findMany({
+        where: { org_id: orgId, fiscal_year_id: fiscalYearId, period_number: { gte: start, lte: end } },
+        select: { id: true },
+        orderBy: { period_number: 'asc' },
+      });
+      return periods.map((p) => p.id);
+    }
+
+    if (params.from_period && params.to_period) {
+      const bounds = await this.prisma.period.findMany({
+        where: {
+          org_id: orgId,
+          id: { in: [params.from_period, params.to_period] },
+          fiscal_year_id: fiscalYearId,
+        },
+        select: { id: true, period_number: true },
+      });
+      if (bounds.length < 2) return [];
+
+      const from = bounds.find((b) => b.id === params.from_period);
+      const to = bounds.find((b) => b.id === params.to_period);
+      if (!from || !to) return [];
+
+      const min = Math.min(from.period_number, to.period_number);
+      const max = Math.max(from.period_number, to.period_number);
+      const periods = await this.prisma.period.findMany({
+        where: { org_id: orgId, fiscal_year_id: fiscalYearId, period_number: { gte: min, lte: max } },
+        select: { id: true },
+        orderBy: { period_number: 'asc' },
+      });
+      return periods.map((p) => p.id);
+    }
+
+    return [];
   }
 
   async markAsRead(currentUser: AlertsCurrentUser, alertId: string): Promise<{ success: true }> {

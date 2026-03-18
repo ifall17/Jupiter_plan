@@ -273,7 +273,7 @@ export class SnapshotsRepository {
     orgId: string,
     periodId: string,
     fiscalYearId: string,
-  ): Promise<Array<{ line_label: string; budgeted: number; actual: number; variance_pct: number }>> {
+  ): Promise<Array<{ line_label: string; budgeted: string; actual: string; variance_pct: string }>> {
     const referenceBudget = await this.prisma.budget.findFirst({
       where: {
         org_id: orgId,
@@ -307,23 +307,23 @@ export class SnapshotsRepository {
 
     return Array.from(groups.entries()).map(([line_label, { budgeted, actual }]) => {
       const variancePct = budgeted.eq(new Prisma.Decimal(0))
-        ? 0
+        ? '0.00'
         : actual
             .minus(budgeted)
             .div(budgeted)
             .mul(100)
             .toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP)
-            .toNumber();
+            .toString();
       return {
         line_label,
-        budgeted: budgeted.toNumber(),
-        actual: actual.toNumber(),
+        budgeted: budgeted.toString(),
+        actual: actual.toString(),
         variance_pct: variancePct,
       };
     });
   }
 
-  async findRunwayWeeks(orgId: string): Promise<number> {
+  async findRunwayWeeks(orgId: string): Promise<string> {
     const [plans, cash] = await this.prisma.$transaction([
       this.prisma.cashFlowPlan.findMany({
         where: { org_id: orgId },
@@ -339,17 +339,17 @@ export class SnapshotsRepository {
     ]);
 
     if (plans.length === 0) {
-      return 0;
+      return '0.00';
     }
 
     const burn = plans.reduce((sum, plan) => sum.plus(plan.outflow), new Prisma.Decimal('0'));
     const avgBurn = burn.div(new Prisma.Decimal(plans.length.toString()));
     if (avgBurn.lte(new Prisma.Decimal('0'))) {
-      return 0;
+      return '0.00';
     }
 
     const cashBalance = cash._sum.balance ?? new Prisma.Decimal('0');
-    return Number(cashBalance.div(avgBurn).toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP));
+    return cashBalance.div(avgBurn).toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP).toString();
   }
 
   async findSummaryYTD(orgId: string, periodIds: string[]): Promise<{
@@ -384,7 +384,7 @@ export class SnapshotsRepository {
     orgId: string,
     periodIds: string[],
     fiscalYearId: string,
-  ): Promise<Array<{ line_label: string; budgeted: number; actual: number; variance_pct: number }>> {
+  ): Promise<Array<{ line_label: string; budgeted: string; actual: string; variance_pct: string }>> {
     if (periodIds.length === 0) return [];
 
     const referenceBudget = await this.prisma.budget.findFirst({
@@ -405,9 +405,9 @@ export class SnapshotsRepository {
 
     return Array.from(groups.entries()).map(([line_label, { budgeted, actual }]) => {
       const variancePct = budgeted.eq(new Prisma.Decimal(0))
-        ? 0
-        : actual.minus(budgeted).div(budgeted).mul(100).toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP).toNumber();
-      return { line_label, budgeted: budgeted.toNumber(), actual: actual.toNumber(), variance_pct: variancePct };
+        ? '0.00'
+        : actual.minus(budgeted).div(budgeted).mul(100).toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP).toString();
+      return { line_label, budgeted: budgeted.toString(), actual: actual.toString(), variance_pct: variancePct };
     });
   }
 }
@@ -424,11 +424,18 @@ export class DashboardService {
     private readonly snapshotsRepository: SnapshotsRepository,
   ) {}
 
-  async getDashboard(currentUser: DashboardCurrentUser, periodId?: string, ytd?: boolean): Promise<DashboardResponseDto> {
+  async getDashboard(
+    currentUser: DashboardCurrentUser,
+    periodId?: string,
+    ytd?: boolean,
+    quarter?: number,
+    fromPeriod?: string,
+    toPeriod?: string,
+  ): Promise<DashboardResponseDto> {
     const startedAt = Date.now();
 
-    if (ytd) {
-      return this.getDashboardYTD(currentUser, startedAt);
+    if (ytd || quarter || (fromPeriod && toPeriod)) {
+      return this.getDashboardAggregate(currentUser, startedAt, { ytd, quarter, fromPeriod, toPeriod });
     }
 
     const period = await this.resolvePeriod(currentUser.org_id, periodId);
@@ -481,41 +488,38 @@ export class DashboardService {
     return payload;
   }
 
-  private async getDashboardYTD(currentUser: DashboardCurrentUser, startedAt: number): Promise<DashboardResponseDto> {
-    const cacheKey = `dashboard:${currentUser.org_id}:YTD`;
+  private async getDashboardAggregate(
+    currentUser: DashboardCurrentUser,
+    startedAt: number,
+    params: { ytd?: boolean; quarter?: number; fromPeriod?: string; toPeriod?: string },
+  ): Promise<DashboardResponseDto> {
+    const selection = await this.resolveAggregatePeriodIds(currentUser.org_id, params);
+    if (selection.periodIds.length === 0) {
+      throw new NotFoundException('Aucune période agrégée trouvée');
+    }
+
+    const cacheKey = `dashboard:${currentUser.org_id}:AGG:${selection.cacheSuffix}`;
     const cached = await this.redisService.get(cacheKey);
     if (cached) {
-      this.logger.log(`Dashboard YTD cache HIT - org: ${currentUser.org_id} (${Date.now() - startedAt}ms)`);
+      this.logger.log(`Dashboard aggregate cache HIT - org: ${currentUser.org_id} (${Date.now() - startedAt}ms)`);
       return JSON.parse(cached) as DashboardResponseDto;
     }
 
-    const ytdPeriodIds = await this.resolveYTDPeriodIds(currentUser.org_id);
-    if (ytdPeriodIds.length === 0) {
-      throw new NotFoundException('Aucune période YTD trouvée');
+    const latestPeriod = await this.prisma.period.findFirst({
+      where: { id: { in: selection.periodIds } },
+      select: { fiscal_year_id: true },
+      orderBy: { period_number: 'desc' },
+    });
+    if (!latestPeriod) {
+      throw new NotFoundException('Aucune période agrégée trouvée');
     }
 
-    const [firstPeriod, latestPeriod] = await Promise.all([
-      this.prisma.period.findFirst({
-        where: { id: { in: ytdPeriodIds } },
-        select: { label: true },
-        orderBy: { period_number: 'asc' },
-      }),
-      this.prisma.period.findFirst({
-        where: { id: { in: ytdPeriodIds } },
-        select: { fiscal_year_id: true, label: true },
-        orderBy: { period_number: 'desc' },
-      }),
-    ]);
-
-    if (!latestPeriod) throw new NotFoundException('Aucune période YTD trouvée');
-    const ytdLabel = firstPeriod ? `YTD (${firstPeriod.label} → ${latestPeriod.label})` : 'YTD';
-
     const [kpis, alertsUnread, alerts, summary, variancePct, runwayWeeks, caTrend] = await Promise.all([
-      this.kpisRepository.findValuesByPeriods(currentUser.org_id, ytdPeriodIds),
-      this.alertsRepository.countUnreadYTD(currentUser.org_id, ytdPeriodIds),
-      this.alertsRepository.findUnreadTop5YTD(currentUser.org_id, ytdPeriodIds),
-      this.snapshotsRepository.findSummaryYTD(currentUser.org_id, ytdPeriodIds),
-      this.snapshotsRepository.findVarianceYTD(currentUser.org_id, ytdPeriodIds, latestPeriod.fiscal_year_id),
+      this.kpisRepository.findValuesByPeriods(currentUser.org_id, selection.periodIds),
+      this.alertsRepository.countUnreadYTD(currentUser.org_id, selection.periodIds),
+      this.alertsRepository.findUnreadTop5YTD(currentUser.org_id, selection.periodIds),
+      this.snapshotsRepository.findSummaryYTD(currentUser.org_id, selection.periodIds),
+      this.snapshotsRepository.findVarianceYTD(currentUser.org_id, selection.periodIds, latestPeriod.fiscal_year_id),
       this.snapshotsRepository.findRunwayWeeks(currentUser.org_id),
       this.kpisRepository.findRevenueTrend3(currentUser.org_id, latestPeriod.fiscal_year_id),
     ]);
@@ -525,7 +529,7 @@ export class DashboardService {
       : summary.ebitda.div(summary.revenue).mul(new Prisma.Decimal('100'));
 
     const payload: DashboardResponseDto = {
-      period: { id: 'YTD', label: ytdLabel, status: PeriodStatus.OPEN },
+      period: { id: selection.cacheSuffix, label: selection.label, status: PeriodStatus.OPEN },
       kpis,
       alerts_unread: alertsUnread,
       alerts,
@@ -542,27 +546,90 @@ export class DashboardService {
     };
 
     await this.redisService.set(cacheKey, JSON.stringify(payload), 'EX', CACHE_TTL_KPI);
-    this.logger.log(`Dashboard YTD cache MISS - org: ${currentUser.org_id} (${Date.now() - startedAt}ms)`);
+    this.logger.log(`Dashboard aggregate cache MISS - org: ${currentUser.org_id} (${Date.now() - startedAt}ms)`);
     return payload;
   }
 
-  private async resolveYTDPeriodIds(orgId: string): Promise<string[]> {
-    const currentMonth = new Date().getMonth() + 1;
+  private async resolveAggregatePeriodIds(
+    orgId: string,
+    params: { ytd?: boolean; quarter?: number; fromPeriod?: string; toPeriod?: string },
+  ): Promise<{ periodIds: string[]; label: string; cacheSuffix: string }> {
     const activePeriod = await this.prisma.period.findFirst({
       where: { org_id: orgId, status: PeriodStatus.OPEN },
       select: { fiscal_year_id: true },
       orderBy: { period_number: 'desc' },
     });
-    const periods = await this.prisma.period.findMany({
-      where: {
-        org_id: orgId,
-        ...(activePeriod ? { fiscal_year_id: activePeriod.fiscal_year_id } : {}),
-        period_number: { lte: currentMonth },
-      },
-      select: { id: true },
-      orderBy: { period_number: 'asc' },
-    });
-    return periods.map((p) => p.id);
+    const fiscalYearId = activePeriod?.fiscal_year_id;
+    if (!fiscalYearId) {
+      return { periodIds: [], label: 'Agrégé', cacheSuffix: 'AGG' };
+    }
+
+    if (params.ytd) {
+      const currentMonth = new Date().getMonth() + 1;
+      const periods = await this.prisma.period.findMany({
+        where: { org_id: orgId, fiscal_year_id: fiscalYearId, period_number: { lte: currentMonth } },
+        select: { id: true, label: true },
+        orderBy: { period_number: 'asc' },
+      });
+      const first = periods[0];
+      const last = periods[periods.length - 1];
+      return {
+        periodIds: periods.map((p) => p.id),
+        label: first && last ? `YTD (${first.label} -> ${last.label})` : 'YTD',
+        cacheSuffix: 'YTD',
+      };
+    }
+
+    if (params.quarter && params.quarter >= 1 && params.quarter <= 4) {
+      const start = (params.quarter - 1) * 3 + 1;
+      const end = start + 2;
+      const periods = await this.prisma.period.findMany({
+        where: { org_id: orgId, fiscal_year_id: fiscalYearId, period_number: { gte: start, lte: end } },
+        select: { id: true },
+        orderBy: { period_number: 'asc' },
+      });
+      return {
+        periodIds: periods.map((p) => p.id),
+        label: `T${params.quarter}`,
+        cacheSuffix: `Q${params.quarter}`,
+      };
+    }
+
+    if (params.fromPeriod && params.toPeriod) {
+      const bounds = await this.prisma.period.findMany({
+        where: {
+          org_id: orgId,
+          id: { in: [params.fromPeriod, params.toPeriod] },
+          fiscal_year_id: fiscalYearId,
+        },
+        select: { id: true, period_number: true, label: true },
+      });
+      if (bounds.length < 2) {
+        return { periodIds: [], label: 'Plage personnalisée', cacheSuffix: 'CUSTOM' };
+      }
+
+      const from = bounds.find((b) => b.id === params.fromPeriod);
+      const to = bounds.find((b) => b.id === params.toPeriod);
+      if (!from || !to) {
+        return { periodIds: [], label: 'Plage personnalisée', cacheSuffix: 'CUSTOM' };
+      }
+
+      const min = Math.min(from.period_number, to.period_number);
+      const max = Math.max(from.period_number, to.period_number);
+      const periods = await this.prisma.period.findMany({
+        where: { org_id: orgId, fiscal_year_id: fiscalYearId, period_number: { gte: min, lte: max } },
+        select: { id: true },
+        orderBy: { period_number: 'asc' },
+      });
+
+      return {
+        periodIds: periods.map((p) => p.id),
+        label: `Plage (${from.label} -> ${to.label})`,
+        cacheSuffix: `CUSTOM:${params.fromPeriod}:${params.toPeriod}`,
+      };
+    }
+
+    return { periodIds: [], label: 'Agrégé', cacheSuffix: 'AGG' };
   }
 
   async invalidateCacheAfterCalcDone(orgId: string, periodId: string): Promise<void> {

@@ -1,42 +1,8 @@
 import { useQuery } from '@tanstack/react-query';
 import apiClient, { unwrapApiData } from '../api/client';
 import { formatFCFA } from '../utils/currency';
-
-type DashboardResponse = {
-  period: {
-    id: string;
-    label: string;
-    status: string;
-  };
-  kpis: Array<{
-    kpi_id: string;
-    kpi_code: string;
-    kpi_label: string;
-    unit: string;
-    value: string;
-    severity: string;
-  }>;
-  alerts_unread: number;
-  alerts: Array<{
-    id: string;
-    severity: 'INFO' | 'WARN' | 'CRITICAL';
-    message: string;
-    created_at: string;
-  }>;
-  is_summary: {
-    revenue: string;
-    expenses: string;
-    ebitda: string;
-    net: string;
-    ebitda_margin: string;
-  };
-  variance_pct: string;
-  runway_weeks: number;
-  ca_trend: Array<{
-    period_label: string;
-    value: string;
-  }>;
-};
+import { DashboardData } from './dashboard/types';
+import { dashboardDataSchema, parseFinancialPayload } from '../contracts/financial.schemas';
 
 function MetricCard({ label, value, tone = 'default' }: { label: string; value: string; tone?: 'default' | 'good' | 'warn' }): JSX.Element {
   const borderColor = tone === 'good' ? 'var(--color-kola)' : tone === 'warn' ? 'var(--color-gold)' : 'var(--color-border)';
@@ -58,9 +24,9 @@ function MetricCard({ label, value, tone = 'default' }: { label: string; value: 
 export default function DashboardPage(): JSX.Element {
   const dashboardQuery = useQuery({
     queryKey: ['dashboard'],
-    queryFn: async (): Promise<DashboardResponse> => {
-      const response = await apiClient.get<DashboardResponse>('/dashboard');
-      return unwrapApiData(response);
+    queryFn: async (): Promise<DashboardData> => {
+      const response = await apiClient.get('/dashboard');
+      return parseFinancialPayload(dashboardDataSchema, unwrapApiData(response), 'dashboard');
     },
   });
 
@@ -78,13 +44,20 @@ export default function DashboardPage(): JSX.Element {
   }
 
   const data = dashboardQuery.data;
+  const avgVariance =
+    data.variance_pct.length === 0
+      ? '0.00'
+      : (
+          data.variance_pct.reduce((sum, item) => sum + (Number(item.variance_pct) || 0), 0) /
+          data.variance_pct.length
+        ).toFixed(2);
 
   return (
     <section style={{ display: 'grid', gap: '1rem' }}>
       <header>
         <h1 style={{ margin: 0 }}>Tableau de bord</h1>
         <p className="jp-muted-text" style={{ margin: '0.35rem 0 0' }}>
-          DashboardPage · periode {data.period.label} · {data.alerts_unread} alertes non lues
+          DashboardPage · periode {data.period.label} · {data.alerts_unread ?? 0} alertes non lues
         </p>
       </header>
 
@@ -99,7 +72,7 @@ export default function DashboardPage(): JSX.Element {
         <MetricCard label="Depenses" value={formatFCFA(data.is_summary.expenses)} />
         <MetricCard label="EBITDA" value={formatFCFA(data.is_summary.ebitda)} tone="good" />
         <MetricCard label="Resultat net" value={formatFCFA(data.is_summary.net)} />
-        <MetricCard label="Variance budget" value={`${data.variance_pct}%`} tone="warn" />
+        <MetricCard label="Variance budget" value={`${avgVariance}%`} tone="warn" />
         <MetricCard label="Runway" value={`${data.runway_weeks} semaines`} />
       </div>
 

@@ -20,11 +20,11 @@ export class DashboardResponseDto {
   };
   variance_pct!: Array<{
     line_label: string;
-    budgeted: number;
-    actual: number;
-    variance_pct: number;
+    budgeted: string;
+    actual: string;
+    variance_pct: string;
   }>;
-  runway_weeks!: number;
+  runway_weeks!: string;
   ca_trend!: Array<{
     period_label: string;
     value: string;

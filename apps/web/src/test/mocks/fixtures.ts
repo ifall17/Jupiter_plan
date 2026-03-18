@@ -119,8 +119,15 @@ export const dashboardFixtures = {
         net: '25000000',
         ebitda_margin: '35.00',
       },
-      variance_pct: '4.30',
-      runway_weeks: 18,
+      variance_pct: [
+        {
+          line_label: 'Ventes',
+          budgeted: '110000000',
+          actual: '120000000',
+          variance_pct: '9.09',
+        },
+      ],
+      runway_weeks: '18.00',
       ca_trend: [
         { period_label: 'Dec 2024', value: '98000000' },
         { period_label: 'Jan 2025', value: '110000000' },

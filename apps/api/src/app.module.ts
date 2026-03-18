@@ -19,6 +19,7 @@ import { FiscalYearsModule } from './modules/fiscal-years/fiscal-years.module';
 import { TransactionsModule } from './modules/transactions/transactions.module';
 import { ImportsModule } from './modules/imports/imports.module';
 import { PeriodsModule } from './modules/periods/periods.module';
+import { ReportsModule } from './modules/reports/reports.module';
 import { CommentsModule } from './modules/comments/comments.module';
 import { JwtThrottlerGuard } from './common/guards/jwt-throttler.guard';
 import { AppController } from './app.controller';
@@ -99,6 +100,7 @@ function validateEnv(env: Record<string, string | undefined>): Record<string, st
     ImportsModule,
     PeriodsModule,
     CommentsModule,
+    ReportsModule,
   ],
   providers: [
     {

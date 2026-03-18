@@ -17,10 +17,21 @@ export class DashboardController {
   @UseGuards(JwtAuthGuard, RolesGuard, OrgGuard)
   async getDashboard(
     @Req() req: Request,
-     @Query('period_id') periodId?: string,
-     @Query('ytd') ytd?: string,
+    @Query('period_id') periodId?: string,
+    @Query('ytd') ytd?: string,
+    @Query('quarter') quarter?: string,
+    @Query('from_period') fromPeriod?: string,
+    @Query('to_period') toPeriod?: string,
   ): Promise<DashboardResponseDto> {
-     return this.dashboardService.getDashboard(this.getCurrentUser(req), periodId, ytd === 'true');
+    const quarterNumber = quarter ? Number.parseInt(quarter, 10) : undefined;
+    return this.dashboardService.getDashboard(
+      this.getCurrentUser(req),
+      periodId,
+      ytd === 'true',
+      Number.isNaN(quarterNumber ?? Number.NaN) ? undefined : quarterNumber,
+      fromPeriod,
+      toPeriod,
+    );
   }
 
   private getCurrentUser(req: Request): DashboardCurrentUser {

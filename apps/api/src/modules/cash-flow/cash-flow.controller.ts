@@ -28,8 +28,23 @@ export class CashFlowController {
   @Get()
   @Roles(UserRole.SUPER_ADMIN, UserRole.FPA, UserRole.LECTEUR)
   @UseGuards(JwtAuthGuard, RolesGuard, OrgGuard)
-  async getCashFlow(@Req() req: Request) {
-    return this.cashFlowService.getRollingPlan(this.getCurrentUser(req).org_id);
+  async getCashFlow(
+    @Req() req: Request,
+    @Query('period_id') periodId?: string,
+    @Query('ytd') ytd?: string,
+    @Query('quarter') quarter?: string,
+    @Query('from_period') fromPeriod?: string,
+    @Query('to_period') toPeriod?: string,
+  ) {
+    const quarterNumber = quarter ? Number.parseInt(quarter, 10) : undefined;
+    return this.cashFlowService.getRollingPlan({
+      org_id: this.getCurrentUser(req).org_id,
+      period_id: periodId,
+      ytd: ytd === 'true',
+      quarter: Number.isNaN(quarterNumber ?? Number.NaN) ? undefined : quarterNumber,
+      from_period: fromPeriod,
+      to_period: toPeriod,
+    });
   }
 
   @Get('entries')
@@ -57,8 +72,22 @@ export class CashFlowController {
   @Get('plans')
   @Roles(UserRole.SUPER_ADMIN, UserRole.FPA, UserRole.LECTEUR)
   @UseGuards(JwtAuthGuard, RolesGuard, OrgGuard)
-  async listPlans(@Req() req: Request): Promise<CashFlowResponseDto[]> {
-    return this.cashFlowService.listPlans(this.getCurrentUser(req));
+  async listPlans(
+    @Req() req: Request,
+    @Query('period_id') periodId?: string,
+    @Query('ytd') ytd?: string,
+    @Query('quarter') quarter?: string,
+    @Query('from_period') fromPeriod?: string,
+    @Query('to_period') toPeriod?: string,
+  ): Promise<CashFlowResponseDto[]> {
+    const quarterNumber = quarter ? Number.parseInt(quarter, 10) : undefined;
+    return this.cashFlowService.listPlans(this.getCurrentUser(req), {
+      period_id: periodId,
+      ytd: ytd === 'true',
+      quarter: Number.isNaN(quarterNumber ?? Number.NaN) ? undefined : quarterNumber,
+      from_period: fromPeriod,
+      to_period: toPeriod,
+    });
   }
 
   @Post('plans')

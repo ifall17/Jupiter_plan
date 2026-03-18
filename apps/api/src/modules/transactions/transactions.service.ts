@@ -20,7 +20,10 @@ export class TransactionsService {
     period_id?: string;
     department?: string;
     line_type?: LineType;
-      ytd?: boolean;
+    ytd?: boolean;
+    quarter?: number;
+    from_period?: string;
+    to_period?: string;
     page?: number;
     limit?: number;
   }): Promise<PaginatedResponseDto<TransactionResponseDto>> {
@@ -28,26 +31,31 @@ export class TransactionsService {
     const limit = params.limit && params.limit > 0 ? Math.min(params.limit, 100) : 20;
     const skip = (page - 1) * limit;
 
-      let periodFilter: Prisma.TransactionWhereInput = {};
-      if (params.ytd) {
-        const ytdIds = await this.resolveYTDPeriodIds(params.currentUser.org_id);
-        if (ytdIds.length > 0) {
-          periodFilter = { period_id: { in: ytdIds } };
-        }
-      } else if (params.period_id) {
-        periodFilter = { period_id: params.period_id };
-      }
+    const periodIds = await this.resolvePeriodIds(params.currentUser.org_id, {
+      period_id: params.period_id,
+      ytd: params.ytd,
+      quarter: params.quarter,
+      from_period: params.from_period,
+      to_period: params.to_period,
+    });
 
-      const where: Prisma.TransactionWhereInput = {
-        org_id: params.currentUser.org_id,
-        ...periodFilter,
-        ...(params.department ? { department: params.department } : {}),
-        ...(params.line_type
-          ? params.line_type === LineType.REVENUE
-            ? { amount: { gt: 0 } }
-            : { amount: { lt: 0 } }
-          : {}),
-      };
+    const periodFilter: Prisma.TransactionWhereInput =
+      periodIds.length > 0
+        ? { period_id: { in: periodIds } }
+        : params.period_id
+          ? { period_id: params.period_id }
+          : {};
+
+    const where: Prisma.TransactionWhereInput = {
+      org_id: params.currentUser.org_id,
+      ...periodFilter,
+      ...(params.department ? { department: params.department } : {}),
+      ...(params.line_type
+        ? params.line_type === LineType.REVENUE
+          ? { amount: { gt: 0 } }
+          : { amount: { lt: 0 } }
+        : {}),
+    };
 
     const [items, total] = await Promise.all([
       this.prisma.transaction.findMany({
@@ -69,34 +77,96 @@ export class TransactionsService {
     };
   }
 
-  private async resolveYTDPeriodIds(orgId: string): Promise<string[]> {
-    const currentMonth = new Date().getMonth() + 1;
+  private async resolvePeriodIds(
+    orgId: string,
+    params: {
+      period_id?: string;
+      ytd?: boolean;
+      quarter?: number;
+      from_period?: string;
+      to_period?: string;
+    },
+  ): Promise<string[]> {
+    if (params.period_id) {
+      return [params.period_id];
+    }
+
     const activePeriod = await this.prisma.period.findFirst({
       where: { org_id: orgId, status: PeriodStatus.OPEN },
       select: { fiscal_year_id: true },
       orderBy: { period_number: 'desc' },
     });
-    const periods = await this.prisma.period.findMany({
-      where: {
-        org_id: orgId,
-        ...(activePeriod ? { fiscal_year_id: activePeriod.fiscal_year_id } : {}),
-        period_number: { lte: currentMonth },
-      },
-      select: { id: true },
-      orderBy: { period_number: 'asc' },
-    });
-    return periods.map((p) => p.id);
+
+    const fiscalYearId = activePeriod?.fiscal_year_id;
+    if (!fiscalYearId) {
+      return [];
+    }
+
+    if (params.ytd) {
+      const currentMonth = new Date().getMonth() + 1;
+      const periods = await this.prisma.period.findMany({
+        where: { org_id: orgId, fiscal_year_id: fiscalYearId, period_number: { lte: currentMonth } },
+        select: { id: true },
+        orderBy: { period_number: 'asc' },
+      });
+      return periods.map((p) => p.id);
+    }
+
+    if (params.quarter && params.quarter >= 1 && params.quarter <= 4) {
+      const start = (params.quarter - 1) * 3 + 1;
+      const end = start + 2;
+      const periods = await this.prisma.period.findMany({
+        where: { org_id: orgId, fiscal_year_id: fiscalYearId, period_number: { gte: start, lte: end } },
+        select: { id: true },
+        orderBy: { period_number: 'asc' },
+      });
+      return periods.map((p) => p.id);
+    }
+
+    if (params.from_period && params.to_period) {
+      const bounds = await this.prisma.period.findMany({
+        where: {
+          org_id: orgId,
+          id: { in: [params.from_period, params.to_period] },
+          fiscal_year_id: fiscalYearId,
+        },
+        select: { id: true, period_number: true },
+      });
+      if (bounds.length < 2) return [];
+
+      const from = bounds.find((b) => b.id === params.from_period);
+      const to = bounds.find((b) => b.id === params.to_period);
+      if (!from || !to) return [];
+
+      const min = Math.min(from.period_number, to.period_number);
+      const max = Math.max(from.period_number, to.period_number);
+      const periods = await this.prisma.period.findMany({
+        where: { org_id: orgId, fiscal_year_id: fiscalYearId, period_number: { gte: min, lte: max } },
+        select: { id: true },
+        orderBy: { period_number: 'asc' },
+      });
+      return periods.map((p) => p.id);
+    }
+
+    return [];
   }
 
   async create(currentUser: TransactionsCurrentUser, dto: CreateTransactionDto): Promise<TransactionResponseDto> {
     await this.ensurePeriodBelongsToOrg(dto.period_id, currentUser.org_id);
 
-    const amount = Number.parseFloat(dto.amount);
-    if (!Number.isFinite(amount) || amount <= 0) {
+    let amount: Prisma.Decimal;
+    try {
+      amount = new Prisma.Decimal(dto.amount);
+    } catch {
       throw new BadRequestException('Amount must be positive');
     }
 
-    const signedAmount = dto.line_type === LineType.EXPENSE ? -amount : amount;
+    if (amount.lte(new Prisma.Decimal('0'))) {
+      throw new BadRequestException('Amount must be positive');
+    }
+
+    const signedAmount =
+      dto.line_type === LineType.EXPENSE ? amount.abs().negated() : amount.abs();
 
     const transaction = await this.prisma.transaction.create({
       data: {
@@ -105,7 +175,7 @@ export class TransactionsService {
         account_code: dto.account_code.trim(),
         account_label: dto.label.trim(),
         department: dto.department,
-        amount: new Prisma.Decimal(signedAmount.toFixed(2)),
+        amount: signedAmount.toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP),
         created_at: new Date(dto.transaction_date),
       },
       include: { period: { select: { id: true, label: true } } },
@@ -144,7 +214,7 @@ export class TransactionsService {
     amount: Prisma.Decimal;
     is_validated: boolean;
   }): TransactionResponseDto {
-    const numericAmount = Number(item.amount);
+    const isRevenue = item.amount.gte(new Prisma.Decimal('0'));
     return {
       id: item.id,
       period_id: item.period_id,
@@ -152,8 +222,8 @@ export class TransactionsService {
       account_code: item.account_code,
       label: item.account_label,
       department: item.department,
-      line_type: numericAmount >= 0 ? LineType.REVENUE : LineType.EXPENSE,
-      amount: Math.abs(numericAmount).toFixed(2),
+      line_type: isRevenue ? LineType.REVENUE : LineType.EXPENSE,
+      amount: item.amount.abs().toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP).toString(),
       is_validated: item.is_validated,
       created_at: item.created_at,
     };

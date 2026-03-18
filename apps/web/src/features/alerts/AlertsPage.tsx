@@ -25,22 +25,31 @@ const SEV: Record<string, { bg: string; color: string; icon: string }> = {
 
 export default function AlertsPage() {
   const queryClient = useQueryClient();
-  const { currentPeriodId, isYTD } = usePeriodStore();
+  const { mode, quarterNumber, customFrom, customTo, currentPeriodId } = usePeriodStore();
 
+  const getPeriodParams = () => {
+    if (mode === 'ytd') return { ytd: true };
+    if (mode === 'quarter') return { quarter: quarterNumber ?? undefined };
+    if (mode === 'custom') return { from_period: customFrom ?? undefined, to_period: customTo ?? undefined };
+    return { period_id: currentPeriodId };
+  };
 
   const { data: alertsData, isLoading, isError } = useQuery({
-    queryKey: ['alerts', currentPeriodId, isYTD],
+    queryKey: ['alerts', mode, quarterNumber, customFrom, customTo, currentPeriodId],
     queryFn: () =>
       apiClient
         .get<PaginatedAlerts>('/alerts', {
           params: {
-            period_id: isYTD ? undefined : currentPeriodId,
-            ytd: isYTD ? true : undefined,
+            ...getPeriodParams(),
             limit: 100,
           },
         })
         .then(unwrapApiData),
-    enabled: !!currentPeriodId || isYTD,
+    enabled:
+      mode === 'ytd' ||
+      (mode === 'quarter' && quarterNumber != null) ||
+      (mode === 'custom' && !!customFrom && !!customTo) ||
+      (!!currentPeriodId && mode === 'single'),
     refetchInterval: 60_000,
   });
 

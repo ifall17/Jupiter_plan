@@ -27,8 +27,9 @@ let KpisController = class KpisController {
     async list(req) {
         return this.kpisService.listActiveKpis(this.getCurrentUser(req));
     }
-    async values(req, periodId, scenarioId) {
-        return this.kpisService.getValues(this.getCurrentUser(req), periodId, scenarioId);
+    async values(req, periodId, scenarioId, ytd, quarter, fromPeriod, toPeriod) {
+        const quarterNumber = quarter ? Number.parseInt(quarter, 10) : undefined;
+        return this.kpisService.getValues(this.getCurrentUser(req), periodId, scenarioId, ytd === 'true', Number.isNaN(quarterNumber ?? Number.NaN) ? undefined : quarterNumber, fromPeriod, toPeriod);
     }
     async calculate(req, periodId) {
         return this.kpisService.calculateForPeriod(this.getCurrentUser(req).org_id, periodId);
@@ -61,8 +62,12 @@ __decorate([
     __param(0, (0, common_1.Req)()),
     __param(1, (0, common_1.Query)('period_id')),
     __param(2, (0, common_1.Query)('scenario_id')),
+    __param(3, (0, common_1.Query)('ytd')),
+    __param(4, (0, common_1.Query)('quarter')),
+    __param(5, (0, common_1.Query)('from_period')),
+    __param(6, (0, common_1.Query)('to_period')),
     __metadata("design:type", Function),
-    __metadata("design:paramtypes", [Object, String, String]),
+    __metadata("design:paramtypes", [Object, String, String, String, String, String, String]),
     __metadata("design:returntype", Promise)
 ], KpisController.prototype, "values", null);
 __decorate([

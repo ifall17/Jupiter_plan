@@ -1,23 +1,10 @@
 import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { z } from 'zod';
 import apiClient, { unwrapApiData } from '../../api/client';
 import { formatFCFA } from '../../utils/currency';
 import { usePeriodStore } from '../../stores/period.store';
-
-type KpiValue = {
-  kpi_id: string;
-  kpi_code: string;
-  kpi_label: string;
-  unit: string;
-  period_id: string;
-  scenario_id: string | null;
-  value: string;
-  severity: string;
-  calculated_at: string;
-  status?: string;
-  label?: string;
-  threshold_warn?: string | number | null;
-};
+import { kpiValueSchema, parseFinancialPayload, type KpiValue } from '../../contracts/financial.schemas';
 
 
 function getStatus(kpi: KpiValue): string {
@@ -38,20 +25,29 @@ function getAccentClass(status: string): string {
 export default function KpisPage() {
   const queryClient = useQueryClient();
   const [isCalculating, setIsCalculating] = useState(false);
-  const { currentPeriodId, isYTD } = usePeriodStore();
+  const { mode, quarterNumber, customFrom, customTo, currentPeriodId } = usePeriodStore();
+  const isYtdMode = mode === 'ytd';
+
+  const getPeriodParams = () => {
+    if (mode === 'ytd') return { ytd: true };
+    if (mode === 'quarter') return { quarter: quarterNumber ?? undefined };
+    if (mode === 'custom') return { from_period: customFrom ?? undefined, to_period: customTo ?? undefined };
+    return { period_id: currentPeriodId };
+  };
 
   const { data: kpis, isLoading, isError } = useQuery({
-    queryKey: ['kpi-values', currentPeriodId, isYTD],
-    enabled: Boolean(currentPeriodId) || isYTD,
+    queryKey: ['kpi-values', mode, quarterNumber, customFrom, customTo, currentPeriodId],
+    enabled:
+      mode === 'ytd' ||
+      (mode === 'quarter' && quarterNumber != null) ||
+      (mode === 'custom' && !!customFrom && !!customTo) ||
+      (!!currentPeriodId && mode === 'single'),
     queryFn: () =>
       apiClient
-        .get<KpiValue[]>('/kpis/values', {
-          params: {
-            period_id: isYTD ? undefined : currentPeriodId,
-            ytd: isYTD ? true : undefined,
-          },
+        .get('/kpis/values', {
+          params: getPeriodParams(),
         })
-        .then(unwrapApiData),
+        .then((response) => parseFinancialPayload(z.array(kpiValueSchema), unwrapApiData(response), 'kpis/values')),
   });
 
   const handleCalculate = async () => {
@@ -85,7 +81,7 @@ export default function KpisPage() {
           <h1 className="page-title">KPIs & Indicateurs</h1>
           <p className="page-sub">
             {isLoading ? '\u2026' : `${values.length} indicateur(s)`}
-            {isYTD ? ' · mode YTD' : ''}
+            {isYtdMode ? ' · mode YTD' : ''}
             {criticalCount > 0 ? ` · ${criticalCount} critique(s)` : ''}
             {warnCount > 0 ? ` · ${warnCount} en attention` : ''}
           </p>
@@ -191,7 +187,7 @@ export default function KpisPage() {
                     <div style={{ flex: 1 }}>
                       <p style={{ fontSize: 10, fontWeight: 600, letterSpacing: '0.14em', textTransform: 'uppercase', color: 'var(--text-lo)', marginBottom: 8 }}>
                         {label}
-                        {isYTD && (
+                        {isYtdMode && (
                           <span
                             style={{
                               padding: '2px 8px',

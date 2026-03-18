@@ -17,22 +17,41 @@ export interface CashFlowCurrentUser {
 export class CashFlowService {
   constructor(private readonly cashFlowRepository: CashFlowRepository) {}
 
-  async getRollingPlan(orgId: string): Promise<{
+  async getRollingPlan(params: {
+    org_id: string;
+    period_id?: string;
+    ytd?: boolean;
+    quarter?: number;
+    from_period?: string;
+    to_period?: string;
+  }): Promise<{
     weekly: Array<{ week: number; inflows: string; outflows: string }>;
     total_inflows: string;
     total_outflows: string;
     runway_weeks: number;
     entries_count: number;
   }> {
-    const plans = await this.cashFlowRepository.findRollingPlans({ org_id: orgId });
+    const periodIds = await this.resolvePeriodIds(params.org_id, {
+      period_id: params.period_id,
+      ytd: params.ytd,
+      quarter: params.quarter,
+      from_period: params.from_period,
+      to_period: params.to_period,
+    });
+
+    const plans = await this.cashFlowRepository.findRollingPlans({
+      org_id: params.org_id,
+      period_ids: periodIds.length > 0 ? periodIds : undefined,
+    });
     const now = new Date();
     now.setHours(0, 0, 0, 0);
     const weekMs = 7 * 24 * 60 * 60 * 1000;
+    const zero = new Prisma.Decimal('0');
 
-    const weekly = Array.from({ length: 13 }, (_, i) => ({
+    const weeklyDecimal = Array.from({ length: 13 }, (_, i) => ({
       week: i + 1,
-      inflows: '0',
-      outflows: '0',
+      inflows: zero,
+      outflows: zero,
     }));
 
     plans.forEach((plan) => {
@@ -58,31 +77,39 @@ export class CashFlowService {
         return;
       }
 
-      const strictAmount = Number.parseFloat(plan.amount.toString());
-      const strictInflows = plan.direction === CashFlowDirection.IN ? strictAmount : 0;
-      const strictOutflows = plan.direction === CashFlowDirection.OUT ? strictAmount : 0;
-      const legacyInflows = Number.parseFloat(plan.inflow.toString());
-      const legacyOutflows = Number.parseFloat(plan.outflow.toString());
-      const normalizedInflows = strictAmount > 0 ? strictInflows : legacyInflows;
-      const normalizedOutflows = strictAmount > 0 ? strictOutflows : legacyOutflows;
+      const strictAmount = plan.amount;
+      const strictInflows = plan.direction === CashFlowDirection.IN ? strictAmount : zero;
+      const strictOutflows = plan.direction === CashFlowDirection.OUT ? strictAmount : zero;
+      const normalizedInflows = strictAmount.gt(zero) ? strictInflows : plan.inflow;
+      const normalizedOutflows = strictAmount.gt(zero) ? strictOutflows : plan.outflow;
 
-      const inflows = Number.parseFloat(weekly[weekIndex].inflows) + normalizedInflows;
-      const outflows = Number.parseFloat(weekly[weekIndex].outflows) + normalizedOutflows;
-      weekly[weekIndex].inflows = String(inflows);
-      weekly[weekIndex].outflows = String(outflows);
+      weeklyDecimal[weekIndex] = {
+        week: weeklyDecimal[weekIndex].week,
+        inflows: weeklyDecimal[weekIndex].inflows.plus(normalizedInflows),
+        outflows: weeklyDecimal[weekIndex].outflows.plus(normalizedOutflows),
+      };
     });
 
-    const totalInflows = weekly.reduce((sum, item) => sum + Number.parseFloat(item.inflows), 0);
-    const totalOutflows = weekly.reduce((sum, item) => sum + Number.parseFloat(item.outflows), 0);
+    const totalInflows = weeklyDecimal.reduce((sum, item) => sum.plus(item.inflows), zero);
+    const totalOutflows = weeklyDecimal.reduce((sum, item) => sum.plus(item.outflows), zero);
 
-    const runway = totalOutflows > 0
-      ? Math.floor(totalInflows / (totalOutflows / 13))
+    const avgOutflow = totalOutflows.gt(zero)
+      ? totalOutflows.div(new Prisma.Decimal('13'))
+      : zero;
+    const runway = avgOutflow.gt(zero)
+      ? totalInflows.div(avgOutflow).toDecimalPlaces(0, Prisma.Decimal.ROUND_FLOOR).toNumber()
       : 0;
+
+    const weekly = weeklyDecimal.map((item) => ({
+      week: item.week,
+      inflows: item.inflows.toString(),
+      outflows: item.outflows.toString(),
+    }));
 
     return {
       weekly,
-      total_inflows: String(totalInflows),
-      total_outflows: String(totalOutflows),
+      total_inflows: totalInflows.toString(),
+      total_outflows: totalOutflows.toString(),
       runway_weeks: runway,
       entries_count: plans.length,
     };
@@ -152,8 +179,21 @@ export class CashFlowService {
     return plans.map((plan) => this.toResponse(plan));
   }
 
-  async listPlans(currentUser: CashFlowCurrentUser): Promise<CashFlowResponseDto[]> {
-    const plans = await this.cashFlowRepository.findRollingPlans({ org_id: currentUser.org_id });
+  async listPlans(
+    currentUser: CashFlowCurrentUser,
+    params?: { period_id?: string; ytd?: boolean; quarter?: number; from_period?: string; to_period?: string },
+  ): Promise<CashFlowResponseDto[]> {
+    const periodIds = await this.resolvePeriodIds(currentUser.org_id, {
+      period_id: params?.period_id,
+      ytd: params?.ytd,
+      quarter: params?.quarter,
+      from_period: params?.from_period,
+      to_period: params?.to_period,
+    });
+    const plans = await this.cashFlowRepository.findRollingPlans({
+      org_id: currentUser.org_id,
+      period_ids: periodIds.length > 0 ? periodIds : undefined,
+    });
     return plans.map((plan) => this.toResponse(plan));
   }
 
@@ -253,13 +293,55 @@ export class CashFlowService {
     return { runway_weeks: runway, severity: 'INFO', threshold_warn: 8, threshold_critical: 4 };
   }
 
+  private async resolvePeriodIds(
+    orgId: string,
+    params: { period_id?: string; ytd?: boolean; quarter?: number; from_period?: string; to_period?: string },
+  ): Promise<string[]> {
+    if (params.period_id) {
+      return [params.period_id];
+    }
+
+    const activePeriod = await this.cashFlowRepository.findActivePeriod(orgId);
+    const fiscalYearId = activePeriod?.fiscal_year_id;
+    if (!fiscalYearId) {
+      return [];
+    }
+
+    if (params.ytd) {
+      const currentMonth = new Date().getMonth() + 1;
+      const periods = await this.cashFlowRepository.findPeriodsByRange(orgId, fiscalYearId, 1, currentMonth);
+      return periods.map((p) => p.id);
+    }
+
+    if (params.quarter && params.quarter >= 1 && params.quarter <= 4) {
+      const start = (params.quarter - 1) * 3 + 1;
+      const end = start + 2;
+      const periods = await this.cashFlowRepository.findPeriodsByRange(orgId, fiscalYearId, start, end);
+      return periods.map((p) => p.id);
+    }
+
+    if (params.from_period && params.to_period) {
+      const from = await this.cashFlowRepository.findPeriodDetails(params.from_period, orgId);
+      const to = await this.cashFlowRepository.findPeriodDetails(params.to_period, orgId);
+      if (!from || !to || from.fiscal_year_id !== to.fiscal_year_id) {
+        return [];
+      }
+      const min = Math.min(from.period_number, to.period_number);
+      const max = Math.max(from.period_number, to.period_number);
+      const periods = await this.cashFlowRepository.findPeriodsByRange(orgId, from.fiscal_year_id, min, max);
+      return periods.map((p) => p.id);
+    }
+
+    return [];
+  }
+
   private calculateRunwayWeeks(cashBalance: Prisma.Decimal, weeklyBurn: Prisma.Decimal): number | null {
     if (weeklyBurn.lte(new Prisma.Decimal('0'))) {
       return null;
     }
 
     const runway = cashBalance.div(weeklyBurn);
-    return Number(runway.toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP));
+    return runway.toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP).toNumber();
   }
 
   private toResponse(plan: RepoCashFlowPlan): CashFlowResponseDto {

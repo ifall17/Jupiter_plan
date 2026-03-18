@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from config import get_settings
-from routers import closing, imports, kpis, scenarios, snapshots
+from routers import closing, imports, kpis, reports, scenarios, snapshots
 
 settings = get_settings()
 
@@ -54,3 +54,4 @@ app.include_router(snapshots.router, prefix="/snapshots", tags=["snapshots"])
 app.include_router(scenarios.router, prefix="/scenarios", tags=["scenarios"])
 app.include_router(closing.router, prefix="/closing", tags=["closing"])
 app.include_router(imports.router, prefix="/imports", tags=["imports"])
+app.include_router(reports.router)

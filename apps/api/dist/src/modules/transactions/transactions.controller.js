@@ -26,12 +26,17 @@ let TransactionsController = class TransactionsController {
     constructor(transactionsService) {
         this.transactionsService = transactionsService;
     }
-    async list(req, periodId, department, lineType, page, limit) {
+    async list(req, periodId, department, lineType, ytd, quarter, fromPeriod, toPeriod, page, limit) {
+        const quarterNumber = quarter ? Number.parseInt(quarter, 10) : undefined;
         return this.transactionsService.list({
             currentUser: this.getCurrentUser(req),
             period_id: periodId,
             department,
             line_type: lineType,
+            ytd: ytd === 'true',
+            quarter: Number.isNaN(quarterNumber ?? Number.NaN) ? undefined : quarterNumber,
+            from_period: fromPeriod,
+            to_period: toPeriod,
             page: this.parsePositiveInt(page),
             limit: this.parsePositiveInt(limit),
         });
@@ -65,10 +70,14 @@ __decorate([
     __param(1, (0, common_1.Query)('period_id')),
     __param(2, (0, common_1.Query)('department')),
     __param(3, (0, common_1.Query)('line_type')),
-    __param(4, (0, common_1.Query)('page')),
-    __param(5, (0, common_1.Query)('limit')),
+    __param(4, (0, common_1.Query)('ytd')),
+    __param(5, (0, common_1.Query)('quarter')),
+    __param(6, (0, common_1.Query)('from_period')),
+    __param(7, (0, common_1.Query)('to_period')),
+    __param(8, (0, common_1.Query)('page')),
+    __param(9, (0, common_1.Query)('limit')),
     __metadata("design:type", Function),
-    __metadata("design:paramtypes", [Object, String, String, String, String, String]),
+    __metadata("design:paramtypes", [Object, String, String, String, String, String, String, String, String, String]),
     __metadata("design:returntype", Promise)
 ], TransactionsController.prototype, "list", null);
 __decorate([

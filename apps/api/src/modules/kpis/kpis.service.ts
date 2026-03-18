@@ -49,34 +49,47 @@ export class KpisService {
     periodId?: string,
     scenarioId?: string,
     ytd?: boolean,
+    quarter?: number,
+    fromPeriod?: string,
+    toPeriod?: string,
   ): Promise<KpiValueResponseDto[]> {
-    if (ytd) {
-      return this.getValuesYTD(currentUser);
-    }
-    if (!periodId) return [];
-    const cacheKey = this.buildCacheKey(currentUser.org_id, periodId, scenarioId);
-    const cached = await this.redisService.get(cacheKey);
-    if (cached) {
-      return JSON.parse(cached) as KpiValueResponseDto[];
-    }
-
-    const values = await this.prisma.kpiValue.findMany({
-      where: {
-        org_id: currentUser.org_id,
-        period_id: periodId,
-        ...(scenarioId ? { scenario_id: scenarioId } : { scenario_id: null }),
-        kpi: { is_active: true },
-      },
-      include: {
-        kpi: true,
-      },
-      orderBy: [{ severity: 'desc' }, { calculated_at: 'desc' }],
+    const resolution = await this.resolvePeriodIds(currentUser.org_id, {
+      periodId,
+      ytd,
+      quarter,
+      fromPeriod,
+      toPeriod,
     });
 
-    const response = values.map((value) => this.toValueResponse(value));
+    if (resolution.periodIds.length === 0) {
+      return [];
+    }
 
-    await this.redisService.set(cacheKey, JSON.stringify(response), 'EX', CACHE_TTL_KPI);
-    return response;
+    if (resolution.mode === 'single') {
+      const targetPeriodId = resolution.periodIds[0];
+      const cacheKey = this.buildCacheKey(currentUser.org_id, targetPeriodId, scenarioId);
+      const cached = await this.redisService.get(cacheKey);
+      if (cached) {
+        return JSON.parse(cached) as KpiValueResponseDto[];
+      }
+
+      const values = await this.prisma.kpiValue.findMany({
+        where: {
+          org_id: currentUser.org_id,
+          period_id: targetPeriodId,
+          ...(scenarioId ? { scenario_id: scenarioId } : { scenario_id: null }),
+          kpi: { is_active: true },
+        },
+        include: { kpi: true },
+        orderBy: [{ severity: 'desc' }, { calculated_at: 'desc' }],
+      });
+
+      const response = values.map((value) => this.toValueResponse(value));
+      await this.redisService.set(cacheKey, JSON.stringify(response), 'EX', CACHE_TTL_KPI);
+      return response;
+    }
+
+    return this.getValuesAggregated(currentUser, resolution.periodIds, resolution.virtualPeriodId);
   }
 
   async getTrend(
@@ -161,33 +174,41 @@ export class KpisService {
     const sumByType = (type: LineType) =>
       budgetLines
         .filter((l) => l.line_type === type)
-        .reduce((s, l) => s + Number(l.amount_actual), 0);
+        .reduce((s, l) => s.plus(l.amount_actual), new Prisma.Decimal('0'));
 
     const ca = sumByType(LineType.REVENUE);
     const opex = sumByType(LineType.EXPENSE);
-    const ebitda = ca - opex;
-    const marge = ca > 0 ? ((ca - opex) / ca) * 100 : 0;
+    const ebitda = ca.minus(opex);
+    const marge = ca.gt(new Prisma.Decimal('0'))
+      ? ebitda.div(ca).mul(new Prisma.Decimal('100'))
+      : new Prisma.Decimal('0');
 
     const cashAgg = await this.prisma.bankAccount.aggregate({
       where: { org_id: orgId, is_active: true },
       _sum: { balance: true },
     });
-    const cash = Number(cashAgg._sum.balance ?? 0);
+    const cash = cashAgg._sum.balance ?? new Prisma.Decimal('0');
 
     const cfPlans = await this.prisma.cashFlowPlan.findMany({
       where: { org_id: orgId, period_id: periodId },
       select: { outflow: true, amount: true, direction: true },
     });
     const totalBurn = cfPlans.reduce((s, p) => {
-      const strict = Number(p.amount);
-      return s + (strict > 0 && p.direction === 'OUT' ? strict : Number(p.outflow));
-    }, 0);
-    const avgWeeklyBurn = cfPlans.length > 0 ? totalBurn / cfPlans.length : opex / 4;
-    const runway = avgWeeklyBurn > 0 ? cash / avgWeeklyBurn : 0;
+      const strict = p.amount;
+      return s.plus(strict.gt(new Prisma.Decimal('0')) && p.direction === 'OUT' ? strict : p.outflow);
+    }, new Prisma.Decimal('0'));
+    const avgWeeklyBurn = cfPlans.length > 0
+      ? totalBurn.div(new Prisma.Decimal(cfPlans.length.toString()))
+      : opex.div(new Prisma.Decimal('4'));
+    const runway = avgWeeklyBurn.gt(new Prisma.Decimal('0'))
+      ? cash.div(avgWeeklyBurn)
+      : new Prisma.Decimal('0');
 
-    const dso = ca > 0 ? (opex / ca) * 30 : 0;
+    const dso = ca.gt(new Prisma.Decimal('0'))
+      ? opex.div(ca).mul(new Prisma.Decimal('30'))
+      : new Prisma.Decimal('0');
 
-    const computed: Record<string, number> = {
+    const computed: Record<string, Prisma.Decimal> = {
       CA: ca,
       EBITDA: ebitda,
       MARGE: marge,
@@ -203,7 +224,7 @@ export class KpisService {
       const rawValue = computed[kpiDef.code];
       if (rawValue === undefined) continue;
 
-      const decimalValue = new Prisma.Decimal(rawValue.toFixed(2));
+      const decimalValue = rawValue.toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP);
       const severity = this.computeKpiSeverity(kpiDef, rawValue);
 
       await this.prisma.kpiValue.deleteMany({
@@ -233,15 +254,18 @@ export class KpisService {
     return { calculated: calculatedCodes.length, kpis: calculatedCodes };
   }
 
-  private async getValuesYTD(currentUser: KpiCurrentUser): Promise<KpiValueResponseDto[]> {
-    const ytdPeriodIds = await this.resolveYTDPeriodIds(currentUser.org_id);
-    if (ytdPeriodIds.length === 0) return [];
+  private async getValuesAggregated(
+    currentUser: KpiCurrentUser,
+    periodIds: string[],
+    virtualPeriodId: string,
+  ): Promise<KpiValueResponseDto[]> {
+    if (periodIds.length === 0) return [];
 
-    const ADDITIVE = new Set(['CA', 'EBITDA', 'CHARGES', 'OPEX']);
+    const additive = new Set(['CA', 'EBITDA', 'CHARGES', 'OPEX']);
     const values = await this.prisma.kpiValue.findMany({
       where: {
         org_id: currentUser.org_id,
-        period_id: { in: ytdPeriodIds },
+        period_id: { in: periodIds },
         scenario_id: null,
         kpi: { is_active: true },
       },
@@ -259,16 +283,16 @@ export class KpisService {
     const result: KpiValueResponseDto[] = [];
     for (const [code, kpiVals] of byCode.entries()) {
       const latest = kpiVals[kpiVals.length - 1];
-      const aggregatedValue = ADDITIVE.has(code)
+      const aggregatedValue = additive.has(code)
         ? kpiVals.reduce((s, v) => s.plus(v.value), new Prisma.Decimal(0))
         : latest.value;
-      const severity = this.computeKpiSeverity(latest.kpi, aggregatedValue.toNumber());
+      const severity = this.computeKpiSeverity(latest.kpi, aggregatedValue);
       result.push({
         kpi_id: latest.kpi_id,
         kpi_code: code,
         kpi_label: latest.kpi.label,
         unit: latest.kpi.unit,
-        period_id: 'YTD',
+        period_id: virtualPeriodId,
         scenario_id: null,
         value: aggregatedValue.toDecimalPlaces(2).toString(),
         severity,
@@ -276,7 +300,6 @@ export class KpisService {
       });
     }
 
-    // Recalculate MARGE/MARGE_EBITDA from summed CA and EBITDA
     const caEntry = result.find((r) => r.kpi_code === 'CA');
     const ebitdaEntry = result.find((r) => r.kpi_code === 'EBITDA');
     const margeEntry = result.find((r) => r.kpi_code === 'MARGE_EBITDA' || r.kpi_code === 'MARGE');
@@ -291,7 +314,7 @@ export class KpisService {
         margeEntry.value = newMarge;
         const margeKpiVals = byCode.get(margeEntry.kpi_code);
         if (margeKpiVals?.length) {
-          margeEntry.severity = this.computeKpiSeverity(margeKpiVals[0].kpi, Number(newMarge));
+          margeEntry.severity = this.computeKpiSeverity(margeKpiVals[0].kpi, new Prisma.Decimal(newMarge));
         }
       }
     }
@@ -302,23 +325,80 @@ export class KpisService {
     });
   }
 
-  private async resolveYTDPeriodIds(orgId: string): Promise<string[]> {
-    const currentMonth = new Date().getMonth() + 1;
+  private async resolvePeriodIds(
+    orgId: string,
+    params: { periodId?: string; ytd?: boolean; quarter?: number; fromPeriod?: string; toPeriod?: string },
+  ): Promise<{ periodIds: string[]; mode: 'single' | 'aggregate'; virtualPeriodId: string }> {
+    if (params.periodId) {
+      return { periodIds: [params.periodId], mode: 'single', virtualPeriodId: params.periodId };
+    }
+
     const activePeriod = await this.prisma.period.findFirst({
       where: { org_id: orgId, status: PeriodStatus.OPEN },
       select: { fiscal_year_id: true },
       orderBy: { period_number: 'desc' },
     });
-    const periods = await this.prisma.period.findMany({
-      where: {
-        org_id: orgId,
-        ...(activePeriod ? { fiscal_year_id: activePeriod.fiscal_year_id } : {}),
-        period_number: { lte: currentMonth },
-      },
-      select: { id: true },
-      orderBy: { period_number: 'asc' },
-    });
-    return periods.map((p) => p.id);
+
+    const fiscalYearId = activePeriod?.fiscal_year_id;
+    if (!fiscalYearId) {
+      return { periodIds: [], mode: 'aggregate', virtualPeriodId: 'AGG' };
+    }
+
+    if (params.ytd) {
+      const currentMonth = new Date().getMonth() + 1;
+      const periods = await this.prisma.period.findMany({
+        where: { org_id: orgId, fiscal_year_id: fiscalYearId, period_number: { lte: currentMonth } },
+        select: { id: true },
+        orderBy: { period_number: 'asc' },
+      });
+      return { periodIds: periods.map((p) => p.id), mode: 'aggregate', virtualPeriodId: 'YTD' };
+    }
+
+    if (params.quarter && params.quarter >= 1 && params.quarter <= 4) {
+      const start = (params.quarter - 1) * 3 + 1;
+      const end = start + 2;
+      const periods = await this.prisma.period.findMany({
+        where: { org_id: orgId, fiscal_year_id: fiscalYearId, period_number: { gte: start, lte: end } },
+        select: { id: true },
+        orderBy: { period_number: 'asc' },
+      });
+      return { periodIds: periods.map((p) => p.id), mode: 'aggregate', virtualPeriodId: `Q${params.quarter}` };
+    }
+
+    if (params.fromPeriod && params.toPeriod) {
+      const bounds = await this.prisma.period.findMany({
+        where: {
+          org_id: orgId,
+          id: { in: [params.fromPeriod, params.toPeriod] },
+          fiscal_year_id: fiscalYearId,
+        },
+        select: { id: true, period_number: true },
+      });
+      if (bounds.length < 2) {
+        return { periodIds: [], mode: 'aggregate', virtualPeriodId: 'CUSTOM' };
+      }
+
+      const from = bounds.find((b) => b.id === params.fromPeriod);
+      const to = bounds.find((b) => b.id === params.toPeriod);
+      if (!from || !to) {
+        return { periodIds: [], mode: 'aggregate', virtualPeriodId: 'CUSTOM' };
+      }
+
+      const min = Math.min(from.period_number, to.period_number);
+      const max = Math.max(from.period_number, to.period_number);
+      const periods = await this.prisma.period.findMany({
+        where: { org_id: orgId, fiscal_year_id: fiscalYearId, period_number: { gte: min, lte: max } },
+        select: { id: true },
+        orderBy: { period_number: 'asc' },
+      });
+      return {
+        periodIds: periods.map((p) => p.id),
+        mode: 'aggregate',
+        virtualPeriodId: `CUSTOM:${params.fromPeriod}:${params.toPeriod}`,
+      };
+    }
+
+    return { periodIds: [], mode: 'aggregate', virtualPeriodId: 'AGG' };
   }
 
   private async seedDefaultKpis(orgId: string): Promise<void> {
@@ -397,17 +477,19 @@ export class KpisService {
 
   private computeKpiSeverity(
     kpiDef: { code: string; threshold_warn: Prisma.Decimal | null; threshold_critical: Prisma.Decimal | null },
-    value: number,
+    value: Prisma.Decimal,
   ): AlertSeverity {
     const lowerIsBetter = kpiDef.code === 'DSO';
 
     if (kpiDef.threshold_critical !== null) {
-      const crit = Number(kpiDef.threshold_critical);
-      if (lowerIsBetter ? value > crit : value < crit) return AlertSeverity.CRITICAL;
+      if (lowerIsBetter ? value.gt(kpiDef.threshold_critical) : value.lt(kpiDef.threshold_critical)) {
+        return AlertSeverity.CRITICAL;
+      }
     }
     if (kpiDef.threshold_warn !== null) {
-      const warn = Number(kpiDef.threshold_warn);
-      if (lowerIsBetter ? value > warn : value < warn) return AlertSeverity.WARN;
+      if (lowerIsBetter ? value.gt(kpiDef.threshold_warn) : value.lt(kpiDef.threshold_warn)) {
+        return AlertSeverity.WARN;
+      }
     }
     return AlertSeverity.INFO;
   }

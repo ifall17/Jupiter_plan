@@ -21,9 +21,21 @@ let TransactionsService = class TransactionsService {
         const page = params.page && params.page > 0 ? params.page : 1;
         const limit = params.limit && params.limit > 0 ? Math.min(params.limit, 100) : 20;
         const skip = (page - 1) * limit;
+        const periodIds = await this.resolvePeriodIds(params.currentUser.org_id, {
+            period_id: params.period_id,
+            ytd: params.ytd,
+            quarter: params.quarter,
+            from_period: params.from_period,
+            to_period: params.to_period,
+        });
+        const periodFilter = periodIds.length > 0
+            ? { period_id: { in: periodIds } }
+            : params.period_id
+                ? { period_id: params.period_id }
+                : {};
         const where = {
             org_id: params.currentUser.org_id,
-            ...(params.period_id ? { period_id: params.period_id } : {}),
+            ...periodFilter,
             ...(params.department ? { department: params.department } : {}),
             ...(params.line_type
                 ? params.line_type === client_1.LineType.REVENUE
@@ -48,6 +60,64 @@ let TransactionsService = class TransactionsService {
             limit,
             totalPages: Math.ceil(total / limit),
         };
+    }
+    async resolvePeriodIds(orgId, params) {
+        if (params.period_id) {
+            return [params.period_id];
+        }
+        const activePeriod = await this.prisma.period.findFirst({
+            where: { org_id: orgId, status: client_1.PeriodStatus.OPEN },
+            select: { fiscal_year_id: true },
+            orderBy: { period_number: 'desc' },
+        });
+        const fiscalYearId = activePeriod?.fiscal_year_id;
+        if (!fiscalYearId) {
+            return [];
+        }
+        if (params.ytd) {
+            const currentMonth = new Date().getMonth() + 1;
+            const periods = await this.prisma.period.findMany({
+                where: { org_id: orgId, fiscal_year_id: fiscalYearId, period_number: { lte: currentMonth } },
+                select: { id: true },
+                orderBy: { period_number: 'asc' },
+            });
+            return periods.map((p) => p.id);
+        }
+        if (params.quarter && params.quarter >= 1 && params.quarter <= 4) {
+            const start = (params.quarter - 1) * 3 + 1;
+            const end = start + 2;
+            const periods = await this.prisma.period.findMany({
+                where: { org_id: orgId, fiscal_year_id: fiscalYearId, period_number: { gte: start, lte: end } },
+                select: { id: true },
+                orderBy: { period_number: 'asc' },
+            });
+            return periods.map((p) => p.id);
+        }
+        if (params.from_period && params.to_period) {
+            const bounds = await this.prisma.period.findMany({
+                where: {
+                    org_id: orgId,
+                    id: { in: [params.from_period, params.to_period] },
+                    fiscal_year_id: fiscalYearId,
+                },
+                select: { id: true, period_number: true },
+            });
+            if (bounds.length < 2)
+                return [];
+            const from = bounds.find((b) => b.id === params.from_period);
+            const to = bounds.find((b) => b.id === params.to_period);
+            if (!from || !to)
+                return [];
+            const min = Math.min(from.period_number, to.period_number);
+            const max = Math.max(from.period_number, to.period_number);
+            const periods = await this.prisma.period.findMany({
+                where: { org_id: orgId, fiscal_year_id: fiscalYearId, period_number: { gte: min, lte: max } },
+                select: { id: true },
+                orderBy: { period_number: 'asc' },
+            });
+            return periods.map((p) => p.id);
+        }
+        return [];
     }
     async create(currentUser, dto) {
         await this.ensurePeriodBelongsToOrg(dto.period_id, currentUser.org_id);

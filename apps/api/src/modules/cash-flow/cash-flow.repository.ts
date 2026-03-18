@@ -120,11 +120,13 @@ export class CashFlowRepository extends BaseRepository<RepoCashFlowPlan> {
     org_id: string;
     fiscal_year_id?: string;
     period_id?: string;
+    period_ids?: string[];
   }): Promise<RepoCashFlowPlan[]> {
     return this.prisma.cashFlowPlan.findMany({
       where: {
         org_id: params.org_id,
         ...(params.period_id ? { period_id: params.period_id } : {}),
+        ...(params.period_ids && params.period_ids.length > 0 ? { period_id: { in: params.period_ids } } : {}),
         ...(params.fiscal_year_id
           ? {
               period: {
@@ -177,6 +179,41 @@ export class CashFlowRepository extends BaseRepository<RepoCashFlowPlan> {
         period_id: periodId,
         week_number: weekNumber,
       },
+    });
+  }
+
+  async findActivePeriod(orgId: string): Promise<{ fiscal_year_id: string } | null> {
+    return this.prisma.period.findFirst({
+      where: { org_id: orgId, status: 'OPEN' },
+      select: { fiscal_year_id: true },
+      orderBy: { period_number: 'desc' },
+    });
+  }
+
+  async findPeriodsByRange(
+    orgId: string,
+    fiscalYearId: string,
+    startPeriodNumber: number,
+    endPeriodNumber: number,
+  ): Promise<Array<{ id: string }>> {
+    return this.prisma.period.findMany({
+      where: {
+        org_id: orgId,
+        fiscal_year_id: fiscalYearId,
+        period_number: { gte: startPeriodNumber, lte: endPeriodNumber },
+      },
+      select: { id: true },
+      orderBy: { period_number: 'asc' },
+    });
+  }
+
+  async findPeriodDetails(
+    periodId: string,
+    orgId: string,
+  ): Promise<{ fiscal_year_id: string; period_number: number } | null> {
+    return this.prisma.period.findFirst({
+      where: { id: periodId, org_id: orgId },
+      select: { fiscal_year_id: true, period_number: true },
     });
   }
 

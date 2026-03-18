@@ -118,9 +118,8 @@ describe('DashboardService', () => {
       ebitda: new Prisma.Decimal('300'),
       net: new Prisma.Decimal('180'),
     });
-    snapshotsRepository.findVariancePct.mockResolvedValue('5.23');
     snapshotsRepository.findVarianceByReferenceBudget.mockResolvedValue([]);
-    snapshotsRepository.findRunwayWeeks.mockResolvedValue(8.5);
+    snapshotsRepository.findRunwayWeeks.mockResolvedValue('8.50');
   });
 
   it('should return cached dashboard on second call', async () => {
@@ -140,8 +139,8 @@ describe('DashboardService', () => {
             net: '0',
             ebitda_margin: '0',
           },
-          variance_pct: '0',
-          runway_weeks: 0,
+          variance_pct: [],
+          runway_weeks: '0.00',
           ca_trend: [],
         }),
       );
@@ -225,6 +224,7 @@ describe('DashboardService', () => {
     expect(typeof result.is_summary.ebitda).toBe('string');
     expect(typeof result.is_summary.net).toBe('string');
     expect(Array.isArray(result.variance_pct)).toBe(true);
+    expect(typeof result.runway_weeks).toBe('string');
     expect(typeof result.ca_trend[0].value).toBe('string');
   });
 });

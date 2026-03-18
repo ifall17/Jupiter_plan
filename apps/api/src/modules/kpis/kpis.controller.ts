@@ -25,11 +25,23 @@ export class KpisController {
   @UseGuards(JwtAuthGuard, RolesGuard, OrgGuard)
   async values(
     @Req() req: Request,
-     @Query('period_id') periodId?: string,
-     @Query('scenario_id') scenarioId?: string,
-     @Query('ytd') ytd?: string,
+    @Query('period_id') periodId?: string,
+    @Query('scenario_id') scenarioId?: string,
+    @Query('ytd') ytd?: string,
+    @Query('quarter') quarter?: string,
+    @Query('from_period') fromPeriod?: string,
+    @Query('to_period') toPeriod?: string,
   ): Promise<KpiValueResponseDto[]> {
-     return this.kpisService.getValues(this.getCurrentUser(req), periodId, scenarioId, ytd === 'true');
+    const quarterNumber = quarter ? Number.parseInt(quarter, 10) : undefined;
+    return this.kpisService.getValues(
+      this.getCurrentUser(req),
+      periodId,
+      scenarioId,
+      ytd === 'true',
+      Number.isNaN(quarterNumber ?? Number.NaN) ? undefined : quarterNumber,
+      fromPeriod,
+      toPeriod,
+    );
   }
 
   @Post('calculate')

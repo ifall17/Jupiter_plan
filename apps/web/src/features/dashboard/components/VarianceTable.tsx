@@ -1,14 +1,8 @@
 import { formatFCFA } from '../../../utils/currency';
-
-interface VarianceItem {
-  line_label: string;
-  budgeted: number;
-  actual: number;
-  variance_pct: number;
-}
+import { DashboardVarianceItem } from '../types';
 
 interface VarianceTableProps {
-  variance_pct: Array<VarianceItem>;
+  variance_pct: Array<DashboardVarianceItem>;
 }
 
 export default function VarianceTable({ variance_pct }: VarianceTableProps) {
@@ -116,7 +110,9 @@ export default function VarianceTable({ variance_pct }: VarianceTableProps) {
             </tr>
           </thead>
           <tbody>
-            {variance_pct.map((item, idx) => (
+            {variance_pct.map((item, idx) => {
+              const variancePctValue = Number(item.variance_pct) || 0;
+              return (
               <tr
                 key={idx}
                 style={{
@@ -158,16 +154,17 @@ export default function VarianceTable({ variance_pct }: VarianceTableProps) {
                     padding: '10px 0',
                     fontWeight: 600,
                     color:
-                      item.variance_pct > 0
+                      variancePctValue > 0
                         ? 'var(--terra)'
                         : 'var(--kola)',
                   }}
                 >
-                  {item.variance_pct > 0 ? '+' : ''}
-                  {item.variance_pct.toFixed(1)}%
+                  {variancePctValue > 0 ? '+' : ''}
+                  {variancePctValue.toFixed(1)}%
                 </td>
               </tr>
-            ))}
+              );
+            })}
           </tbody>
         </table>
       </div>

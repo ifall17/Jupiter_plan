@@ -31,16 +31,23 @@ export class AlertsController {
     @Query('is_read') isRead?: string,
     @Query('severity') severity?: AlertSeverity,
     @Query('period_id') periodId?: string,
-      @Query('ytd') ytd?: string,
+    @Query('ytd') ytd?: string,
+    @Query('quarter') quarter?: string,
+    @Query('from_period') fromPeriod?: string,
+    @Query('to_period') toPeriod?: string,
     @Query('page') page?: string,
     @Query('limit') limit?: string,
   ): Promise<PaginatedResponseDto<AlertResponseDto>> {
+    const quarterNumber = quarter ? Number.parseInt(quarter, 10) : undefined;
     return this.alertsService.listAlerts({
       currentUser: this.getCurrentUser(req),
       is_read: this.parseBoolean(isRead),
       severity,
       period_id: periodId,
-        ytd: ytd === 'true',
+      ytd: ytd === 'true',
+      quarter: Number.isNaN(quarterNumber ?? Number.NaN) ? undefined : quarterNumber,
+      from_period: fromPeriod,
+      to_period: toPeriod,
       page: this.parsePositiveInt(page),
       limit: this.parsePositiveInt(limit),
     });

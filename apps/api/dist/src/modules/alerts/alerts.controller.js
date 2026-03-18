@@ -25,12 +25,17 @@ let AlertsController = class AlertsController {
     constructor(alertsService) {
         this.alertsService = alertsService;
     }
-    async list(req, isRead, severity, periodId, page, limit) {
+    async list(req, isRead, severity, periodId, ytd, quarter, fromPeriod, toPeriod, page, limit) {
+        const quarterNumber = quarter ? Number.parseInt(quarter, 10) : undefined;
         return this.alertsService.listAlerts({
             currentUser: this.getCurrentUser(req),
             is_read: this.parseBoolean(isRead),
             severity,
             period_id: periodId,
+            ytd: ytd === 'true',
+            quarter: Number.isNaN(quarterNumber ?? Number.NaN) ? undefined : quarterNumber,
+            from_period: fromPeriod,
+            to_period: toPeriod,
             page: this.parsePositiveInt(page),
             limit: this.parsePositiveInt(limit),
         });
@@ -80,10 +85,14 @@ __decorate([
     __param(1, (0, common_1.Query)('is_read')),
     __param(2, (0, common_1.Query)('severity')),
     __param(3, (0, common_1.Query)('period_id')),
-    __param(4, (0, common_1.Query)('page')),
-    __param(5, (0, common_1.Query)('limit')),
+    __param(4, (0, common_1.Query)('ytd')),
+    __param(5, (0, common_1.Query)('quarter')),
+    __param(6, (0, common_1.Query)('from_period')),
+    __param(7, (0, common_1.Query)('to_period')),
+    __param(8, (0, common_1.Query)('page')),
+    __param(9, (0, common_1.Query)('limit')),
     __metadata("design:type", Function),
-    __metadata("design:paramtypes", [Object, String, String, String, String, String]),
+    __metadata("design:paramtypes", [Object, String, String, String, String, String, String, String, String, String]),
     __metadata("design:returntype", Promise)
 ], AlertsController.prototype, "list", null);
 __decorate([

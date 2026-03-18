@@ -23,16 +23,23 @@ export class TransactionsController {
     @Query('period_id') periodId?: string,
     @Query('department') department?: string,
     @Query('line_type') lineType?: LineType,
-      @Query('ytd') ytd?: string,
+    @Query('ytd') ytd?: string,
+    @Query('quarter') quarter?: string,
+    @Query('from_period') fromPeriod?: string,
+    @Query('to_period') toPeriod?: string,
     @Query('page') page?: string,
     @Query('limit') limit?: string,
   ): Promise<PaginatedResponseDto<TransactionResponseDto>> {
+    const quarterNumber = quarter ? Number.parseInt(quarter, 10) : undefined;
     return this.transactionsService.list({
       currentUser: this.getCurrentUser(req),
       period_id: periodId,
       department,
       line_type: lineType,
-        ytd: ytd === 'true',
+      ytd: ytd === 'true',
+      quarter: Number.isNaN(quarterNumber ?? Number.NaN) ? undefined : quarterNumber,
+      from_period: fromPeriod,
+      to_period: toPeriod,
       page: this.parsePositiveInt(page),
       limit: this.parsePositiveInt(limit),
     });

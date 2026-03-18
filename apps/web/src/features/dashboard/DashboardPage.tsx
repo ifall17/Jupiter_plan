@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { apiClient } from '../../api/client';
+import { apiClient, unwrapApiData } from '../../api/client';
 import { formatFCFA } from '../../utils/currency';
 import KpiCard from './components/KpiCard';
 import AlertBanner from './components/AlertBanner';
@@ -10,68 +10,33 @@ import AlertsList from './components/AlertsList';
 import DashboardSkeleton from './components/DashboardSkeleton';
 import DashboardError from './components/DashboardError';
 import { usePeriodStore } from '../../stores/period.store';
-
-interface Alert {
-  id: string;
-  severity: 'CRITICAL' | 'WARN' | 'INFO';
-  message: string;
-}
-
-interface VarianceItem {
-  line_label: string;
-  budgeted: number;
-  actual: number;
-  variance_pct: number;
-}
-
-interface DashboardData {
-  period: {
-    id: string;
-    label: string;
-    status: string;
-  };
-  kpis: Array<{
-    kpi_id: string;
-    kpi_code: string;
-    kpi_label: string;
-    unit: string;
-    value: string;
-    severity: string;
-  }>;
-  alerts: Alert[];
-  is_summary: {
-    revenue: number | string;
-    revenue_trend?: 'up' | 'down' | 'stable';
-    ebitda: number | string;
-    ebitda_trend?: 'up' | 'down' | 'stable';
-    ebitda_margin: number | string;
-    net: number | string;
-    net_trend?: 'up' | 'down' | 'stable';
-  };
-  variance_pct: VarianceItem[];
-  runway_weeks: number;
-  ca_trend: Array<{
-    period_label: string;
-    value: number | string;
-  }>;
-}
+import { dashboardDataSchema, parseFinancialPayload } from '../../contracts/financial.schemas';
 
 export default function DashboardPage() {
-  const { currentPeriodId, isYTD } = usePeriodStore();
+  const { mode, quarterNumber, customFrom, customTo, currentPeriodId } = usePeriodStore();
+  const isYtdMode = mode === 'ytd';
+
+  const getPeriodParams = () => {
+    if (mode === 'ytd') return { ytd: true };
+    if (mode === 'quarter') return { quarter: quarterNumber ?? undefined };
+    if (mode === 'custom') return { from_period: customFrom ?? undefined, to_period: customTo ?? undefined };
+    return { period_id: currentPeriodId };
+  };
 
   // Appel API réel — jamais de données hardcodées
   const { data, isLoading, isError } = useQuery({
-    queryKey: ['dashboard', currentPeriodId, isYTD],
+    queryKey: ['dashboard', mode, quarterNumber, customFrom, customTo, currentPeriodId],
     queryFn: () =>
       apiClient
-        .get<{ success: boolean; data: DashboardData }>('/dashboard', {
-          params: {
-            period_id: isYTD ? undefined : currentPeriodId,
-            ytd: isYTD ? true : undefined,
-          },
+        .get('/dashboard', {
+          params: getPeriodParams(),
         })
-        .then((r) => r.data.data),
-    enabled: !!currentPeriodId || isYTD,
+        .then((r) => parseFinancialPayload(dashboardDataSchema, unwrapApiData(r), 'dashboard')),
+    enabled:
+      mode === 'ytd' ||
+      (mode === 'quarter' && quarterNumber != null) ||
+      (mode === 'custom' && !!customFrom && !!customTo) ||
+      (!!currentPeriodId && mode === 'single'),
     staleTime: 60_000, // cache 1 minute
     retry: 2,
   });
@@ -95,6 +60,7 @@ export default function DashboardPage() {
   );
   const otherAlerts = alerts.filter((a) => a.severity !== 'CRITICAL');
   const varianceRows = variance_pct ?? [];
+  const runwayWeeks = Number(runway_weeks) || 0;
   const caTrendRows = ca_trend.map((point) => ({
     period_label: point.period_label,
     value: Number(point.value) || 0,
@@ -109,7 +75,7 @@ export default function DashboardPage() {
           <h1 className="page-title">Vue d'ensemble</h1>
           <p className="page-sub">
             Période en cours : <strong>{period.label}</strong>
-            {isYTD ? ' · Vue YTD' : ''}
+            {isYtdMode ? ' · Vue YTD' : ''}
             {' · '}Statut : <strong>{period.status}</strong>
           </p>
         </div>
@@ -129,7 +95,7 @@ export default function DashboardPage() {
           trend={is_summary.revenue_trend}
           color="terra"
           testId="kpi-CA"
-          showYtdBadge={isYTD}
+          showYtdBadge={isYtdMode}
         />
         <KpiCard
           label="EBITDA"
@@ -138,7 +104,7 @@ export default function DashboardPage() {
           trend={is_summary.ebitda_trend}
           color="gold"
           testId="kpi-EBITDA"
-          showYtdBadge={isYTD}
+          showYtdBadge={isYtdMode}
         />
         <KpiCard
           label="Résultat Net"
@@ -146,32 +112,32 @@ export default function DashboardPage() {
           trend={is_summary.net_trend}
           color="kola"
           testId="kpi-MARGE"
-          showYtdBadge={isYTD}
+          showYtdBadge={isYtdMode}
         />
         <KpiCard
           label="Runway Trésorerie"
           value={`${runway_weeks} semaines`}
           subtitle={
-            runway_weeks < 8
+            runwayWeeks < 8
               ? '⚠️ Attention'
               : '✅ Sain'
           }
           color={
-            runway_weeks < 4
+            runwayWeeks < 4
               ? 'terra'
-              : runway_weeks < 8
+              : runwayWeeks < 8
                 ? 'gold'
                 : 'kola'
           }
           testId="kpi-RUNWAY"
-          showYtdBadge={isYTD}
+          showYtdBadge={isYtdMode}
         />
       </div>
 
       {/* Graphiques */}
       <div className="charts-row">
         <IsChart data={caTrendRows} />
-        <CashRunway runway={runway_weeks} />
+        <CashRunway runway={runwayWeeks} />
       </div>
 
       {/* Variance Budget vs Réel */}
@@ -184,3 +150,4 @@ export default function DashboardPage() {
     </div>
   );
 }
+
