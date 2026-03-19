@@ -1,5 +1,7 @@
 import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useForm } from 'react-hook-form';
+import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import apiClient, { unwrapApiData } from '../../api/client';
 import { formatFCFA } from '../../utils/currency';
@@ -33,6 +35,40 @@ const FLOW_TYPES: Array<{ value: FlowType; label: string }> = [
   { value: 'AUTRE_ENTREE', label: 'Autre encaissement' },
   { value: 'AUTRE_SORTIE', label: 'Autre decaissement' },
 ];
+
+const addCashFlowSchema = z.object({
+  flow_type: z.enum([
+    'ENCAISSEMENT_CLIENT',
+    'DECAISSEMENT_FOURNISSEUR',
+    'SALAIRES',
+    'IMPOTS_TAXES',
+    'INVESTISSEMENT',
+    'FINANCEMENT',
+    'AUTRE_ENTREE',
+    'AUTRE_SORTIE',
+  ]),
+  label: z.string().trim().min(1, 'Les champs obligatoires doivent etre renseignes'),
+  amount: z
+    .string()
+    .min(1, 'Le montant doit etre un nombre positif')
+    .refine((value) => Number.isFinite(Number(value)) && Number(value) > 0, 'Le montant doit etre un nombre positif'),
+  planned_date: z.string().min(1, 'Les champs obligatoires doivent etre renseignes'),
+  bank_account_id: z.string().optional(),
+  notes: z.string().optional(),
+});
+
+type AddCashFlowFormValues = z.infer<typeof addCashFlowSchema>;
+
+const addBankAccountSchema = z.object({
+  bank_name: z.string().trim().min(1, 'Nom de banque et intitule obligatoires'),
+  account_number: z.string(),
+  account_name: z.string().trim().min(1, 'Nom de banque et intitule obligatoires'),
+  current_balance: z
+    .string()
+    .refine((value) => value === '' || (Number.isFinite(Number(value)) && Number(value) >= 0), 'Solde actuel invalide'),
+});
+
+type AddBankAccountFormValues = z.infer<typeof addBankAccountSchema>;
 
 function deriveDirection(flowType: FlowType): 'IN' | 'OUT' {
   if (flowType === 'ENCAISSEMENT_CLIENT' || flowType === 'AUTRE_ENTREE' || flowType === 'FINANCEMENT') {
@@ -118,27 +154,35 @@ function AddCashFlowModal({
   onClose: () => void;
   onSuccess: () => void;
 }) {
-  const [form, setForm] = useState({
-    flow_type: 'ENCAISSEMENT_CLIENT' as FlowType,
-    label: '',
-    amount: '',
-    planned_date: new Date().toISOString().slice(0, 10),
-    bank_account_id: '',
-    notes: '',
-  });
   const [error, setError] = useState('');
+  const {
+    register,
+    handleSubmit,
+    watch,
+    formState: { errors },
+  } = useForm<AddCashFlowFormValues>({
+    resolver: zodResolver(addCashFlowSchema),
+    defaultValues: {
+      flow_type: 'ENCAISSEMENT_CLIENT',
+      label: '',
+      amount: '',
+      planned_date: new Date().toISOString().slice(0, 10),
+      bank_account_id: '',
+      notes: '',
+    },
+  });
 
   const createMutation = useMutation({
-    mutationFn: () =>
+    mutationFn: (values: AddCashFlowFormValues) =>
       apiClient
         .post('/cash-flow/plans', {
-          flow_type: form.flow_type,
-          label: form.label.trim(),
-          amount: Number(form.amount).toFixed(2),
-          planned_date: form.planned_date,
-          direction: deriveDirection(form.flow_type),
-          bank_account_id: form.bank_account_id || undefined,
-          notes: form.notes.trim() || undefined,
+          flow_type: values.flow_type,
+          label: values.label.trim(),
+          amount: Number(values.amount).toFixed(2),
+          planned_date: values.planned_date,
+          direction: deriveDirection(values.flow_type),
+          bank_account_id: values.bank_account_id || undefined,
+          notes: values.notes?.trim() || undefined,
         })
         .then((response) => response.data),
     onSuccess: () => {
@@ -149,7 +193,9 @@ function AddCashFlowModal({
     },
   });
 
-  const computedWeek = useMemo(() => computeWeekFromDate(form.planned_date), [form.planned_date]);
+  const flowType = watch('flow_type');
+  const plannedDate = watch('planned_date');
+  const computedWeek = useMemo(() => computeWeekFromDate(plannedDate || new Date().toISOString().slice(0, 10)), [plannedDate]);
 
   return (
     <ModalShell title="Saisir un flux de tresorerie" onClose={onClose}>
@@ -160,8 +206,7 @@ function AddCashFlowModal({
           </label>
           <select
             id="cashflow-type"
-            value={form.flow_type}
-            onChange={(event) => setForm({ ...form, flow_type: event.target.value as FlowType })}
+            {...register('flow_type')}
             style={{ width: '100%', border: '1px solid var(--border)', borderRadius: 8, padding: '10px 14px', fontSize: 13 }}
           >
             {FLOW_TYPES.map((item) => (
@@ -178,11 +223,11 @@ function AddCashFlowModal({
           </label>
           <input
             id="cashflow-label"
-            value={form.label}
-            onChange={(event) => setForm({ ...form, label: event.target.value })}
+            {...register('label')}
             placeholder="Ex: Reglement client A"
             style={{ width: '100%', border: '1px solid var(--border)', borderRadius: 8, padding: '10px 14px', fontSize: 13 }}
           />
+          {errors.label ? <p style={{ marginTop: 6, marginBottom: 0, color: 'var(--terra)', fontSize: 12 }}>{errors.label.message}</p> : null}
         </div>
 
         <div style={{ display: 'grid', gap: 10, gridTemplateColumns: 'repeat(2, minmax(0, 1fr))' }}>
@@ -195,11 +240,11 @@ function AddCashFlowModal({
               type="number"
               min="0"
               step="0.01"
-              value={form.amount}
-              onChange={(event) => setForm({ ...form, amount: event.target.value })}
+              {...register('amount')}
               placeholder="500000"
               style={{ width: '100%', border: '1px solid var(--border)', borderRadius: 8, padding: '10px 14px', fontSize: 13 }}
             />
+            {errors.amount ? <p style={{ marginTop: 6, marginBottom: 0, color: 'var(--terra)', fontSize: 12 }}>{errors.amount.message}</p> : null}
           </div>
 
           <div>
@@ -209,15 +254,15 @@ function AddCashFlowModal({
             <input
               id="cashflow-date"
               type="date"
-              value={form.planned_date}
-              onChange={(event) => setForm({ ...form, planned_date: event.target.value })}
+              {...register('planned_date')}
               style={{ width: '100%', border: '1px solid var(--border)', borderRadius: 8, padding: '10px 14px', fontSize: 13 }}
             />
+            {errors.planned_date ? <p style={{ marginTop: 6, marginBottom: 0, color: 'var(--terra)', fontSize: 12 }}>{errors.planned_date.message}</p> : null}
           </div>
         </div>
 
         <div style={{ border: '1px solid var(--border)', borderRadius: 10, background: 'var(--surface2)', padding: '10px 12px', fontSize: 12, color: 'var(--text-md)' }}>
-          Semaine calculee automatiquement : <strong>S{computedWeek}</strong> · Direction : <strong>{deriveDirection(form.flow_type)}</strong>
+          Semaine calculee automatiquement : <strong>S{computedWeek}</strong> · Direction : <strong>{deriveDirection((flowType as FlowType) || 'ENCAISSEMENT_CLIENT')}</strong>
         </div>
 
         <div>
@@ -226,8 +271,7 @@ function AddCashFlowModal({
           </label>
           <select
             id="cashflow-bank"
-            value={form.bank_account_id}
-            onChange={(event) => setForm({ ...form, bank_account_id: event.target.value })}
+            {...register('bank_account_id')}
             style={{ width: '100%', border: '1px solid var(--border)', borderRadius: 8, padding: '10px 14px', fontSize: 13 }}
           >
             <option value="">Aucun</option>
@@ -246,8 +290,7 @@ function AddCashFlowModal({
           <textarea
             id="cashflow-notes"
             rows={3}
-            value={form.notes}
-            onChange={(event) => setForm({ ...form, notes: event.target.value })}
+            {...register('notes')}
             style={{ width: '100%', resize: 'vertical', border: '1px solid var(--border)', borderRadius: 8, padding: '10px 14px', fontSize: 13 }}
           />
         </div>
@@ -265,18 +308,10 @@ function AddCashFlowModal({
         </button>
         <button
           type="button"
-          onClick={() => {
-            if (!form.label.trim() || !form.planned_date) {
-              setError('Les champs obligatoires doivent etre renseignes');
-              return;
-            }
-            if (!Number.isFinite(Number(form.amount)) || Number(form.amount) <= 0) {
-              setError('Le montant doit etre un nombre positif');
-              return;
-            }
+          onClick={handleSubmit((values) => {
             setError('');
-            createMutation.mutate();
-          }}
+            createMutation.mutate(values);
+          })}
           disabled={createMutation.isPending}
           style={{
             padding: '8px 18px',
@@ -299,11 +334,19 @@ function BankAccountsModal({ onClose }: { onClose: () => void }) {
   const queryClient = useQueryClient();
   const [showCreate, setShowCreate] = useState(false);
   const [error, setError] = useState('');
-  const [form, setForm] = useState({
-    bank_name: '',
-    account_number: '',
-    account_name: '',
-    current_balance: '',
+  const {
+    register,
+    handleSubmit,
+    reset,
+    formState: { errors },
+  } = useForm<AddBankAccountFormValues>({
+    resolver: zodResolver(addBankAccountSchema),
+    defaultValues: {
+      bank_name: '',
+      account_number: '',
+      account_name: '',
+      current_balance: '',
+    },
   });
 
   const accountsQuery = useQuery({
@@ -315,18 +358,18 @@ function BankAccountsModal({ onClose }: { onClose: () => void }) {
   });
 
   const createMutation = useMutation({
-    mutationFn: () =>
+    mutationFn: (values: AddBankAccountFormValues) =>
       apiClient.post('/bank-accounts', {
-        bank_name: form.bank_name.trim(),
-        account_number: form.account_number.trim(),
-        account_name: form.account_name.trim(),
+        bank_name: values.bank_name.trim(),
+        account_number: values.account_number?.trim(),
+        account_name: values.account_name.trim(),
         currency: 'XOF',
-        current_balance: Number(form.current_balance || '0').toFixed(2),
+        current_balance: Number(values.current_balance || '0').toFixed(2),
       }),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ['bank-accounts'] });
       setShowCreate(false);
-      setForm({ bank_name: '', account_number: '', account_name: '', current_balance: '' });
+      reset({ bank_name: '', account_number: '', account_name: '', current_balance: '' });
       setError('');
     },
     onError: (err: any) => {
@@ -391,20 +434,17 @@ function BankAccountsModal({ onClose }: { onClose: () => void }) {
         {showCreate ? (
           <div style={{ border: '1px solid var(--border)', borderRadius: 12, padding: 14, background: 'var(--surface2)', display: 'grid', gap: 10 }}>
             <input
-              value={form.bank_name}
-              onChange={(event) => setForm({ ...form, bank_name: event.target.value })}
+              {...register('bank_name')}
               placeholder="Nom de la banque"
               style={{ width: '100%', border: '1px solid var(--border)', borderRadius: 8, padding: '9px 12px', fontSize: 13 }}
             />
             <input
-              value={form.account_number}
-              onChange={(event) => setForm({ ...form, account_number: event.target.value })}
+              {...register('account_number')}
               placeholder="Numero de compte"
               style={{ width: '100%', border: '1px solid var(--border)', borderRadius: 8, padding: '9px 12px', fontSize: 13 }}
             />
             <input
-              value={form.account_name}
-              onChange={(event) => setForm({ ...form, account_name: event.target.value })}
+              {...register('account_name')}
               placeholder="Intitule du compte"
               style={{ width: '100%', border: '1px solid var(--border)', borderRadius: 8, padding: '9px 12px', fontSize: 13 }}
             />
@@ -412,11 +452,15 @@ function BankAccountsModal({ onClose }: { onClose: () => void }) {
               type="number"
               min="0"
               step="0.01"
-              value={form.current_balance}
-              onChange={(event) => setForm({ ...form, current_balance: event.target.value })}
+              {...register('current_balance')}
               placeholder="Solde actuel"
               style={{ width: '100%', border: '1px solid var(--border)', borderRadius: 8, padding: '9px 12px', fontSize: 13 }}
             />
+            {errors.bank_name || errors.account_name || errors.current_balance ? (
+              <p style={{ margin: 0, color: 'var(--terra)', fontSize: 12 }}>
+                {errors.bank_name?.message || errors.account_name?.message || errors.current_balance?.message}
+              </p>
+            ) : null}
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
               <button
                 type="button"
@@ -427,14 +471,10 @@ function BankAccountsModal({ onClose }: { onClose: () => void }) {
               </button>
               <button
                 type="button"
-                onClick={() => {
-                  if (!form.bank_name.trim() || !form.account_name.trim()) {
-                    setError('Nom de banque et intitule obligatoires');
-                    return;
-                  }
+                onClick={handleSubmit((values) => {
                   setError('');
-                  createMutation.mutate();
-                }}
+                  createMutation.mutate(values);
+                })}
                 disabled={createMutation.isPending}
                 style={{
                   padding: '8px 12px',

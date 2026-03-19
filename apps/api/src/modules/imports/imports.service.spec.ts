@@ -1,15 +1,21 @@
 import { BadRequestException, UnauthorizedException } from '@nestjs/common';
 import { ImportStatus, LineType, Prisma } from '@prisma/client';
 import { AuditAction } from '@shared/enums';
-import * as XLSX from 'xlsx';
+import ExcelJS from 'exceljs';
 import { AuditService } from '../../common/services/audit.service';
+import { EventsGateway } from '../../common/services/events.gateway';
 import { ImportsService } from './imports.service';
 
-function buildWorkbookBuffer(rows: Array<Array<string>>): Buffer {
-  const workbook = XLSX.utils.book_new();
-  const sheet = XLSX.utils.aoa_to_sheet(rows);
-  XLSX.utils.book_append_sheet(workbook, sheet, 'Import');
-  return XLSX.write(workbook, { bookType: 'xlsx', type: 'buffer' }) as Buffer;
+async function buildWorkbookBuffer(rows: Array<Array<string>>): Promise<Buffer> {
+  const workbook = new ExcelJS.Workbook();
+  const sheet = workbook.addWorksheet('Import');
+
+  rows.forEach((row) => {
+    sheet.addRow(row);
+  });
+
+  const buffer = await workbook.xlsx.writeBuffer();
+  return Buffer.from(buffer);
 }
 
 describe('ImportsService', () => {
@@ -20,6 +26,7 @@ describe('ImportsService', () => {
     transaction: { createMany: jest.Mock };
   };
   let auditService: jest.Mocked<AuditService>;
+  let eventsGateway: { emitToOrg: jest.Mock };
 
   beforeEach(() => {
     prisma = {
@@ -32,7 +39,11 @@ describe('ImportsService', () => {
       createLog: jest.fn(),
     } as unknown as jest.Mocked<AuditService>;
 
-    service = new ImportsService(prisma as never, auditService);
+    eventsGateway = {
+      emitToOrg: jest.fn(),
+    };
+
+    service = new ImportsService(prisma as never, auditService, eventsGateway as unknown as EventsGateway);
   });
 
   it('should reject invalid MIME types with a coded error', async () => {
@@ -57,7 +68,7 @@ describe('ImportsService', () => {
   });
 
   it('should persist a server generated filename and Decimal amounts', async () => {
-    const buffer = buildWorkbookBuffer([
+    const buffer = await buildWorkbookBuffer([
       ['Code Comptable', 'Libelle', 'Departement', 'Type', 'Montant', 'Date'],
       ['601000', 'Achats', 'OPS', 'depense', '1 234,50', '2026-03-01'],
     ]);
@@ -104,10 +115,20 @@ describe('ImportsService', () => {
       2,
       expect.objectContaining({ action: AuditAction.IMPORT_DONE, entity_id: 'job-1' }),
     );
+    expect(eventsGateway.emitToOrg).toHaveBeenCalledWith(
+      'org-1',
+      'IMPORT_PROGRESS',
+      expect.objectContaining({ job_id: 'job-1', progress: 10, status: ImportStatus.PROCESSING }),
+    );
+    expect(eventsGateway.emitToOrg).toHaveBeenCalledWith(
+      'org-1',
+      'IMPORT_DONE',
+      expect.objectContaining({ job_id: 'job-1', inserted: 1, skipped: 0, status: ImportStatus.DONE }),
+    );
   });
 
   it('should reject periods outside the organization with a coded unauthorized error', async () => {
-    const buffer = buildWorkbookBuffer([
+    const buffer = await buildWorkbookBuffer([
       ['Code Comptable', 'Libelle', 'Departement', 'Type', 'Montant', 'Date'],
       ['701000', 'Ventes', 'SALES', 'revenu', '2500', '2026-03-01'],
     ]);

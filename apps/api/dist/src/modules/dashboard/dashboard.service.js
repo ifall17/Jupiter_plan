@@ -287,17 +287,17 @@ let SnapshotsRepository = class SnapshotsRepository {
         }
         return Array.from(groups.entries()).map(([line_label, { budgeted, actual }]) => {
             const variancePct = budgeted.eq(new client_1.Prisma.Decimal(0))
-                ? 0
+                ? '0.00'
                 : actual
                     .minus(budgeted)
                     .div(budgeted)
                     .mul(100)
                     .toDecimalPlaces(2, client_1.Prisma.Decimal.ROUND_HALF_UP)
-                    .toNumber();
+                    .toString();
             return {
                 line_label,
-                budgeted: budgeted.toNumber(),
-                actual: actual.toNumber(),
+                budgeted: budgeted.toString(),
+                actual: actual.toString(),
                 variance_pct: variancePct,
             };
         });
@@ -317,15 +317,15 @@ let SnapshotsRepository = class SnapshotsRepository {
             }),
         ]);
         if (plans.length === 0) {
-            return 0;
+            return '0.00';
         }
         const burn = plans.reduce((sum, plan) => sum.plus(plan.outflow), new client_1.Prisma.Decimal('0'));
         const avgBurn = burn.div(new client_1.Prisma.Decimal(plans.length.toString()));
         if (avgBurn.lte(new client_1.Prisma.Decimal('0'))) {
-            return 0;
+            return '0.00';
         }
         const cashBalance = cash._sum.balance ?? new client_1.Prisma.Decimal('0');
-        return Number(cashBalance.div(avgBurn).toDecimalPlaces(2, client_1.Prisma.Decimal.ROUND_HALF_UP));
+        return cashBalance.div(avgBurn).toDecimalPlaces(2, client_1.Prisma.Decimal.ROUND_HALF_UP).toString();
     }
     async findSummaryYTD(orgId, periodIds) {
         if (periodIds.length === 0) {
@@ -367,9 +367,9 @@ let SnapshotsRepository = class SnapshotsRepository {
         }
         return Array.from(groups.entries()).map(([line_label, { budgeted, actual }]) => {
             const variancePct = budgeted.eq(new client_1.Prisma.Decimal(0))
-                ? 0
-                : actual.minus(budgeted).div(budgeted).mul(100).toDecimalPlaces(2, client_1.Prisma.Decimal.ROUND_HALF_UP).toNumber();
-            return { line_label, budgeted: budgeted.toNumber(), actual: actual.toNumber(), variance_pct: variancePct };
+                ? '0.00'
+                : actual.minus(budgeted).div(budgeted).mul(100).toDecimalPlaces(2, client_1.Prisma.Decimal.ROUND_HALF_UP).toString();
+            return { line_label, budgeted: budgeted.toString(), actual: actual.toString(), variance_pct: variancePct };
         });
     }
 };

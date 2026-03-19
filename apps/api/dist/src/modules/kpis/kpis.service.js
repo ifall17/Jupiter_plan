@@ -139,27 +139,35 @@ let KpisService = KpisService_1 = class KpisService {
         });
         const sumByType = (type) => budgetLines
             .filter((l) => l.line_type === type)
-            .reduce((s, l) => s + Number(l.amount_actual), 0);
+            .reduce((s, l) => s.plus(l.amount_actual), new client_1.Prisma.Decimal('0'));
         const ca = sumByType(client_1.LineType.REVENUE);
         const opex = sumByType(client_1.LineType.EXPENSE);
-        const ebitda = ca - opex;
-        const marge = ca > 0 ? ((ca - opex) / ca) * 100 : 0;
+        const ebitda = ca.minus(opex);
+        const marge = ca.gt(new client_1.Prisma.Decimal('0'))
+            ? ebitda.div(ca).mul(new client_1.Prisma.Decimal('100'))
+            : new client_1.Prisma.Decimal('0');
         const cashAgg = await this.prisma.bankAccount.aggregate({
             where: { org_id: orgId, is_active: true },
             _sum: { balance: true },
         });
-        const cash = Number(cashAgg._sum.balance ?? 0);
+        const cash = cashAgg._sum.balance ?? new client_1.Prisma.Decimal('0');
         const cfPlans = await this.prisma.cashFlowPlan.findMany({
             where: { org_id: orgId, period_id: periodId },
             select: { outflow: true, amount: true, direction: true },
         });
         const totalBurn = cfPlans.reduce((s, p) => {
-            const strict = Number(p.amount);
-            return s + (strict > 0 && p.direction === 'OUT' ? strict : Number(p.outflow));
-        }, 0);
-        const avgWeeklyBurn = cfPlans.length > 0 ? totalBurn / cfPlans.length : opex / 4;
-        const runway = avgWeeklyBurn > 0 ? cash / avgWeeklyBurn : 0;
-        const dso = ca > 0 ? (opex / ca) * 30 : 0;
+            const strict = p.amount;
+            return s.plus(strict.gt(new client_1.Prisma.Decimal('0')) && p.direction === 'OUT' ? strict : p.outflow);
+        }, new client_1.Prisma.Decimal('0'));
+        const avgWeeklyBurn = cfPlans.length > 0
+            ? totalBurn.div(new client_1.Prisma.Decimal(cfPlans.length.toString()))
+            : opex.div(new client_1.Prisma.Decimal('4'));
+        const runway = avgWeeklyBurn.gt(new client_1.Prisma.Decimal('0'))
+            ? cash.div(avgWeeklyBurn)
+            : new client_1.Prisma.Decimal('0');
+        const dso = ca.gt(new client_1.Prisma.Decimal('0'))
+            ? opex.div(ca).mul(new client_1.Prisma.Decimal('30'))
+            : new client_1.Prisma.Decimal('0');
         const computed = {
             CA: ca,
             EBITDA: ebitda,
@@ -174,7 +182,7 @@ let KpisService = KpisService_1 = class KpisService {
             const rawValue = computed[kpiDef.code];
             if (rawValue === undefined)
                 continue;
-            const decimalValue = new client_1.Prisma.Decimal(rawValue.toFixed(2));
+            const decimalValue = rawValue.toDecimalPlaces(2, client_1.Prisma.Decimal.ROUND_HALF_UP);
             const severity = this.computeKpiSeverity(kpiDef, rawValue);
             await this.prisma.kpiValue.deleteMany({
                 where: { org_id: orgId, kpi_id: kpiDef.id, period_id: periodId, scenario_id: null },
@@ -222,7 +230,7 @@ let KpisService = KpisService_1 = class KpisService {
             const aggregatedValue = additive.has(code)
                 ? kpiVals.reduce((s, v) => s.plus(v.value), new client_1.Prisma.Decimal(0))
                 : latest.value;
-            const severity = this.computeKpiSeverity(latest.kpi, aggregatedValue.toNumber());
+            const severity = this.computeKpiSeverity(latest.kpi, aggregatedValue);
             result.push({
                 kpi_id: latest.kpi_id,
                 kpi_code: code,
@@ -249,7 +257,7 @@ let KpisService = KpisService_1 = class KpisService {
                 margeEntry.value = newMarge;
                 const margeKpiVals = byCode.get(margeEntry.kpi_code);
                 if (margeKpiVals?.length) {
-                    margeEntry.severity = this.computeKpiSeverity(margeKpiVals[0].kpi, Number(newMarge));
+                    margeEntry.severity = this.computeKpiSeverity(margeKpiVals[0].kpi, new client_1.Prisma.Decimal(newMarge));
                 }
             }
         }
@@ -390,14 +398,14 @@ let KpisService = KpisService_1 = class KpisService {
     computeKpiSeverity(kpiDef, value) {
         const lowerIsBetter = kpiDef.code === 'DSO';
         if (kpiDef.threshold_critical !== null) {
-            const crit = Number(kpiDef.threshold_critical);
-            if (lowerIsBetter ? value > crit : value < crit)
+            if (lowerIsBetter ? value.gt(kpiDef.threshold_critical) : value.lt(kpiDef.threshold_critical)) {
                 return client_1.AlertSeverity.CRITICAL;
+            }
         }
         if (kpiDef.threshold_warn !== null) {
-            const warn = Number(kpiDef.threshold_warn);
-            if (lowerIsBetter ? value > warn : value < warn)
+            if (lowerIsBetter ? value.gt(kpiDef.threshold_warn) : value.lt(kpiDef.threshold_warn)) {
                 return client_1.AlertSeverity.WARN;
+            }
         }
         return client_1.AlertSeverity.INFO;
     }

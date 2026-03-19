@@ -1,23 +1,41 @@
-import { FormEvent, useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
+import { useForm } from 'react-hook-form';
+import { zodResolver } from '@hookform/resolvers/zod';
+import { z } from 'zod';
 import { useLogin } from '../hooks/useAuth';
 
+const loginSchema = z.object({
+  email: z.email('Email invalide').trim(),
+  password: z.string().min(1, 'Le mot de passe est obligatoire'),
+});
+
+type LoginFormValues = z.infer<typeof loginSchema>;
+
 export default function LoginPage(): JSX.Element {
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const loginMutation = useLogin();
 
   const isSubmitting = loginMutation.isPending;
+  const {
+    register,
+    handleSubmit,
+    formState: { errors },
+  } = useForm<LoginFormValues>({
+    resolver: zodResolver(loginSchema),
+    defaultValues: {
+      email: '',
+      password: '',
+    },
+  });
 
-  const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
+  const onSubmit = (values: LoginFormValues) => {
     setErrorMessage(null);
 
     if (isSubmitting) {
       return;
     }
 
-    loginMutation.mutate({ email: email.trim(), password });
+    loginMutation.mutate({ email: values.email.trim(), password: values.password });
   };
 
   useEffect(() => {
@@ -60,15 +78,13 @@ export default function LoginPage(): JSX.Element {
           </p>
         </header>
 
-        <form onSubmit={handleSubmit} style={{ display: 'grid', gap: '0.9rem' }}>
+        <form onSubmit={handleSubmit(onSubmit)} style={{ display: 'grid', gap: '0.9rem' }}>
           <label style={{ display: 'grid', gap: '0.35rem' }}>
             <span>Email</span>
             <input
               type="email"
               autoComplete="email"
-              value={email}
-              onChange={(event) => setEmail(event.target.value)}
-              required
+              {...register('email')}
               style={{
                 border: '1px solid var(--color-border)',
                 borderRadius: '10px',
@@ -76,6 +92,9 @@ export default function LoginPage(): JSX.Element {
                 fontSize: '0.95rem',
               }}
             />
+            {errors.email ? (
+              <span style={{ color: '#b42318', fontSize: '0.8rem' }}>{errors.email.message}</span>
+            ) : null}
           </label>
 
           <label style={{ display: 'grid', gap: '0.35rem' }}>
@@ -83,9 +102,7 @@ export default function LoginPage(): JSX.Element {
             <input
               type="password"
               autoComplete="current-password"
-              value={password}
-              onChange={(event) => setPassword(event.target.value)}
-              required
+              {...register('password')}
               style={{
                 border: '1px solid var(--color-border)',
                 borderRadius: '10px',
@@ -93,6 +110,9 @@ export default function LoginPage(): JSX.Element {
                 fontSize: '0.95rem',
               }}
             />
+            {errors.password ? (
+              <span style={{ color: '#b42318', fontSize: '0.8rem' }}>{errors.password.message}</span>
+            ) : null}
           </label>
 
           <button

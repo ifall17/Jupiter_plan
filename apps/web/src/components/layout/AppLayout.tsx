@@ -8,6 +8,7 @@ import { useAuthStore } from '../../stores/auth.store';
 import { useOrgStore } from '../../stores/org.store';
 import { useMe } from '../../hooks/useAuth';
 import apiClient, { unwrapApiData } from '../../api/client';
+import { type AppNotificationPayload } from '../../utils/notifications';
 
 type OrgInfo = {
   id: string;
@@ -74,6 +75,31 @@ export default function AppLayout(): JSX.Element {
   );
 
   useSocket(handlers);
+
+  useEffect(() => {
+    const onError = (event: Event) => {
+      const customEvent = event as CustomEvent<string>;
+      if (typeof customEvent.detail === 'string' && customEvent.detail.trim()) {
+        setToast({ message: customEvent.detail.trim(), severity: 'CRITICAL' });
+      }
+    };
+
+    const onNotify = (event: Event) => {
+      const customEvent = event as CustomEvent<AppNotificationPayload>;
+      const payload = customEvent.detail;
+      if (payload && typeof payload.message === 'string' && payload.message.trim()) {
+        setToast({ message: payload.message.trim(), severity: payload.severity ?? 'INFO' });
+      }
+    };
+
+    window.addEventListener('app:error', onError as EventListener);
+    window.addEventListener('app:notify', onNotify as EventListener);
+
+    return () => {
+      window.removeEventListener('app:error', onError as EventListener);
+      window.removeEventListener('app:notify', onNotify as EventListener);
+    };
+  }, []);
 
   useEffect(() => {
     if (!toast) {

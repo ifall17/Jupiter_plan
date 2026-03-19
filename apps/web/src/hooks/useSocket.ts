@@ -41,6 +41,7 @@ type SocketHandlers = {
 export function useSocket(handlers: SocketHandlers = {}) {
   const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
   const accessToken = useAuthStore((state) => state.accessToken);
+  const orgId = useAuthStore((state) => state.user?.org_id ?? null);
   const socketRef = useRef<Socket | null>(null);
   const socketsEnabled = (import.meta.env.VITE_ENABLE_SOCKET as string | undefined) === 'true';
 
@@ -50,7 +51,7 @@ export function useSocket(handlers: SocketHandlers = {}) {
   }, []);
 
   useEffect(() => {
-    if (!socketsEnabled || !isAuthenticated || !accessToken) {
+    if (!socketsEnabled || !isAuthenticated || !accessToken || !orgId) {
       if (socketRef.current) {
         socketRef.current.disconnect();
         socketRef.current = null;
@@ -66,6 +67,10 @@ export function useSocket(handlers: SocketHandlers = {}) {
       reconnection: true,
       reconnectionAttempts: 10,
       reconnectionDelay: 2000,
+    });
+
+    socket.on('connect', () => {
+      socket.emit('JOIN_ORG', { org_id: orgId });
     });
 
     socket.on('IMPORT_PROGRESS', (payload: ImportProgressEvent) => {
@@ -102,6 +107,7 @@ export function useSocket(handlers: SocketHandlers = {}) {
     handlers.onImportProgress,
     handlers.onPeriodClosed,
     isAuthenticated,
+    orgId,
     socketsEnabled,
     wsUrl,
   ]);

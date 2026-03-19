@@ -1,5 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
+import { useForm } from 'react-hook-form';
+import { zodResolver } from '@hookform/resolvers/zod';
+import { z } from 'zod';
 import { useNavigate, useParams } from 'react-router-dom';
 import apiClient, { unwrapApiData } from '../../api/client';
 import { formatFCFA } from '../../utils/currency';
@@ -32,14 +35,22 @@ type Period = {
   label: string;
 };
 
-type LineForm = {
-  account_code: string;
-  account_label: string;
-  department: string;
-  line_type: 'REVENUE' | 'EXPENSE';
-  amount_budget: string;
-  period_id: string;
-};
+const budgetLineSchema = z.object({
+  account_code: z.string().trim().regex(/^\d{6}$/, 'Code SYSCOHADA invalide (6 chiffres obligatoires)'),
+  account_label: z.string().trim().min(1, 'Tous les champs obligatoires doivent être remplis'),
+  department: z.string().min(1, 'Tous les champs obligatoires doivent être remplis'),
+  line_type: z.enum(['REVENUE', 'EXPENSE']),
+  amount_budget: z
+    .string()
+    .min(1, 'Montant budget invalide (nombre positif obligatoire)')
+    .refine((value) => {
+      const parsed = Number(value.replace(',', '.'));
+      return Number.isFinite(parsed) && parsed > 0;
+    }, 'Montant budget invalide (nombre positif obligatoire)'),
+  period_id: z.string().min(1, 'Tous les champs obligatoires doivent être remplis'),
+});
+
+type BudgetLineFormValues = z.infer<typeof budgetLineSchema>;
 
 function calcVariance(budget: string, actual: string): string {
   const b = parseFloat(budget ?? '0');
@@ -188,14 +199,25 @@ export default function BudgetDetailPage() {
   const [isAddingLine, setIsAddingLine] = useState(false);
   const [lineError, setLineError] = useState('');
   const [successToast, setSuccessToast] = useState('');
-  const [lineForm, setLineForm] = useState<LineForm>({
-    account_code: '',
-    account_label: '',
-    department: 'VENTES',
-    line_type: 'REVENUE',
-    amount_budget: '',
-    period_id: '',
+  const {
+    register,
+    handleSubmit,
+    reset,
+    watch,
+    setValue,
+    formState: { errors },
+  } = useForm<BudgetLineFormValues>({
+    resolver: zodResolver(budgetLineSchema),
+    defaultValues: {
+      account_code: '',
+      account_label: '',
+      department: 'VENTES',
+      line_type: 'REVENUE',
+      amount_budget: '',
+      period_id: '',
+    },
   });
+  const watchedPeriodId = watch('period_id');
 
   const { data, isLoading } = useQuery({
     queryKey: ['budget', id],
@@ -228,7 +250,7 @@ export default function BudgetDetailPage() {
     const onEsc = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
         setShowLineModal(false);
-        setLineForm({
+        reset({
           account_code: '',
           account_label: '',
           department: 'VENTES',
@@ -242,16 +264,16 @@ export default function BudgetDetailPage() {
 
     document.addEventListener('keydown', onEsc);
     return () => document.removeEventListener('keydown', onEsc);
-  }, [showLineModal]);
+  }, [reset, showLineModal]);
 
   const periods = periodsQuery.data ?? [];
 
   useEffect(() => {
-    if (!showLineModal || lineForm.period_id || periods.length === 0) {
+    if (!showLineModal || watchedPeriodId || periods.length === 0) {
       return;
     }
-    setLineForm((prev) => ({ ...prev, period_id: periods[0].id }));
-  }, [showLineModal, lineForm.period_id, periods]);
+    setValue('period_id', periods[0].id);
+  }, [periods, setValue, showLineModal, watchedPeriodId]);
 
   if (isLoading) return <div>Chargement...</div>;
   if (!data) return <div>Budget introuvable.</div>;
@@ -261,7 +283,7 @@ export default function BudgetDetailPage() {
   const totalActual = budget.lines?.reduce((sum, line) => sum + (Number(line.amount_actual) || 0), 0) ?? 0;
 
   const resetLineForm = () => {
-    setLineForm({
+    reset({
       account_code: '',
       account_label: '',
       department: 'VENTES',
@@ -272,22 +294,8 @@ export default function BudgetDetailPage() {
     setLineError('');
   };
 
-  const handleAddLine = async () => {
-    if (!/^\d{6}$/.test(lineForm.account_code.trim())) {
-      setLineError('Code SYSCOHADA invalide (6 chiffres obligatoires)');
-      return;
-    }
-    if (!lineForm.account_label.trim() || !lineForm.department || !lineForm.line_type || !lineForm.period_id) {
-      setLineError('Tous les champs obligatoires doivent être remplis');
-      return;
-    }
-
-    const parsedAmount = Number(lineForm.amount_budget.replace(',', '.'));
-    if (!Number.isFinite(parsedAmount) || parsedAmount <= 0) {
-      setLineError('Montant budget invalide (nombre positif obligatoire)');
-      return;
-    }
-
+  const handleAddLine = handleSubmit(async (values) => {
+    const parsedAmount = Number(values.amount_budget.replace(',', '.'));
     setIsAddingLine(true);
     setLineError('');
     try {
@@ -302,12 +310,12 @@ export default function BudgetDetailPage() {
       }));
 
       const newLinePayload = {
-        account_code: lineForm.account_code.trim(),
-        account_label: lineForm.account_label.trim(),
-        department: lineForm.department,
-        line_type: lineForm.line_type,
+        account_code: values.account_code.trim(),
+        account_label: values.account_label.trim(),
+        department: values.department,
+        line_type: values.line_type,
         amount_budget: parsedAmount.toFixed(2),
-        period_id: lineForm.period_id,
+        period_id: values.period_id,
       };
 
       await apiClient.put(`/budgets/${budget.id}/lines`, {
@@ -323,7 +331,7 @@ export default function BudgetDetailPage() {
     } finally {
       setIsAddingLine(false);
     }
-  };
+  });
 
   return (
     <div style={{ padding: '28px 32px', maxWidth: 1360, margin: '0 auto' }}>
@@ -371,7 +379,7 @@ export default function BudgetDetailPage() {
         <button
           onClick={() => {
             setShowLineModal(true);
-            setLineForm((prev) => ({ ...prev, period_id: prev.period_id || periods[0]?.id || '' }));
+            setValue('period_id', watchedPeriodId || periods[0]?.id || '');
             setLineError('');
           }}
           style={{
@@ -586,11 +594,11 @@ export default function BudgetDetailPage() {
                   Code comptable SYSCOHADA *
                 </label>
                 <input
-                  value={lineForm.account_code}
-                  onChange={(e) => setLineForm({ ...lineForm, account_code: e.target.value })}
+                  {...register('account_code')}
                   placeholder="Ex: 701000"
                   style={{ width: '100%', padding: '10px 14px', border: '1px solid var(--border)', borderRadius: 8, fontSize: 13 }}
                 />
+                {errors.account_code ? <p style={{ marginTop: 6, marginBottom: 0, color: 'var(--terra)', fontSize: 12 }}>{errors.account_code.message}</p> : null}
               </div>
 
               <div>
@@ -598,11 +606,11 @@ export default function BudgetDetailPage() {
                   Libellé *
                 </label>
                 <input
-                  value={lineForm.account_label}
-                  onChange={(e) => setLineForm({ ...lineForm, account_label: e.target.value })}
+                  {...register('account_label')}
                   placeholder="Ex: Ventes locales"
                   style={{ width: '100%', padding: '10px 14px', border: '1px solid var(--border)', borderRadius: 8, fontSize: 13 }}
                 />
+                {errors.account_label ? <p style={{ marginTop: 6, marginBottom: 0, color: 'var(--terra)', fontSize: 12 }}>{errors.account_label.message}</p> : null}
               </div>
 
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 10 }}>
@@ -611,8 +619,7 @@ export default function BudgetDetailPage() {
                     Département *
                   </label>
                   <select
-                    value={lineForm.department}
-                    onChange={(e) => setLineForm({ ...lineForm, department: e.target.value })}
+                    {...register('department')}
                     style={{ width: '100%', padding: '10px 14px', border: '1px solid var(--border)', borderRadius: 8, fontSize: 13 }}
                   >
                     {['VENTES', 'ACHATS', 'RH', 'FINANCE', 'MARKETING', 'IT', 'PRODUCTION', 'OPERATIONS'].map((dep) => (
@@ -628,8 +635,7 @@ export default function BudgetDetailPage() {
                     Type *
                   </label>
                   <select
-                    value={lineForm.line_type}
-                    onChange={(e) => setLineForm({ ...lineForm, line_type: e.target.value as 'REVENUE' | 'EXPENSE' })}
+                    {...register('line_type')}
                     style={{ width: '100%', padding: '10px 14px', border: '1px solid var(--border)', borderRadius: 8, fontSize: 13 }}
                   >
                     <option value="REVENUE">REVENUE</option>
@@ -647,11 +653,11 @@ export default function BudgetDetailPage() {
                     type="number"
                     min="0"
                     step="0.01"
-                    value={lineForm.amount_budget}
-                    onChange={(e) => setLineForm({ ...lineForm, amount_budget: e.target.value })}
+                    {...register('amount_budget')}
                     placeholder="Ex: 12500000"
                     style={{ width: '100%', padding: '10px 14px', border: '1px solid var(--border)', borderRadius: 8, fontSize: 13 }}
                   />
+                  {errors.amount_budget ? <p style={{ marginTop: 6, marginBottom: 0, color: 'var(--terra)', fontSize: 12 }}>{errors.amount_budget.message}</p> : null}
                 </div>
 
                 <div>
@@ -659,8 +665,7 @@ export default function BudgetDetailPage() {
                     Période *
                   </label>
                   <select
-                    value={lineForm.period_id}
-                    onChange={(e) => setLineForm({ ...lineForm, period_id: e.target.value })}
+                    {...register('period_id')}
                     style={{ width: '100%', padding: '10px 14px', border: '1px solid var(--border)', borderRadius: 8, fontSize: 13 }}
                   >
                     <option value="">Sélectionner une période</option>
@@ -670,6 +675,7 @@ export default function BudgetDetailPage() {
                       </option>
                     ))}
                   </select>
+                  {errors.period_id ? <p style={{ marginTop: 6, fontSize: 11, color: 'var(--terra)' }}>{errors.period_id.message}</p> : null}
                   {periods.length === 0 ? (
                     <p style={{ marginTop: 6, fontSize: 11, color: 'var(--terra)' }}>
                       Aucune période disponible. Ouvrez une période avant d'ajouter une ligne.

@@ -21,19 +21,19 @@ const jwt_auth_guard_1 = require("../../common/guards/jwt-auth.guard");
 const org_guard_1 = require("../../common/guards/org.guard");
 const roles_guard_1 = require("../../common/guards/roles.guard");
 const imports_service_1 = require("./imports.service");
+function importBadRequest(code, message) {
+    return new common_1.BadRequestException({ code, message });
+}
 let ImportsController = class ImportsController {
     constructor(importsService) {
         this.importsService = importsService;
     }
     async upload(req, file, periodId) {
-        if (!file) {
-            throw new common_1.BadRequestException('file is required');
-        }
         if (!periodId) {
-            throw new common_1.BadRequestException('period_id is required');
+            throw importBadRequest('IMPORT_PERIOD_REQUIRED', 'period_id is required');
         }
         const user = this.getCurrentUser(req);
-        const job = await this.importsService.processImport(file, periodId, user.org_id, user.sub);
+        const job = await this.importsService.processImport(file, periodId, user.org_id, user.sub, this.getClientIp(req));
         return job;
     }
     async getJob(req, jobId) {
@@ -46,6 +46,13 @@ let ImportsController = class ImportsController {
         }
         return user;
     }
+    getClientIp(req) {
+        const forwardedFor = req.headers['x-forwarded-for'];
+        if (typeof forwardedFor === 'string') {
+            return forwardedFor.split(',')[0]?.trim() || req.ip;
+        }
+        return req.ip;
+    }
 };
 exports.ImportsController = ImportsController;
 __decorate([
@@ -53,10 +60,22 @@ __decorate([
     (0, roles_decorator_1.Roles)(client_1.UserRole.SUPER_ADMIN, client_1.UserRole.FPA, client_1.UserRole.CONTRIBUTEUR),
     (0, common_1.UseGuards)(jwt_auth_guard_1.JwtAuthGuard, roles_guard_1.RolesGuard, org_guard_1.OrgGuard),
     (0, common_1.UseInterceptors)((0, platform_express_1.FileInterceptor)('file', {
-        limits: { fileSize: 10 * 1024 * 1024 },
+        limits: { fileSize: imports_service_1.MAX_IMPORT_FILE_SIZE_BYTES },
+        fileFilter: (_req, file, callback) => {
+            if (file.mimetype !== 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet') {
+                callback(importBadRequest('IMPORT_FILE_TYPE_INVALID', 'Only .xlsx MIME type is supported'), false);
+                return;
+            }
+            callback(null, true);
+        },
     })),
     __param(0, (0, common_1.Req)()),
-    __param(1, (0, common_1.UploadedFile)()),
+    __param(1, (0, common_1.UploadedFile)(new common_1.ParseFilePipeBuilder()
+        .addMaxSizeValidator({ maxSize: imports_service_1.MAX_IMPORT_FILE_SIZE_BYTES })
+        .build({
+        fileIsRequired: true,
+        exceptionFactory: () => importBadRequest('IMPORT_FILE_TOO_LARGE', 'File too large'),
+    }))),
     __param(2, (0, common_1.Body)('period_id')),
     __metadata("design:type", Function),
     __metadata("design:paramtypes", [Object, Object, String]),

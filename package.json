@@ -2,6 +2,13 @@
   "name": "jupiter-plan",
   "private": true,
   "scripts": {
+    "prepare": "npm run hooks:install",
+    "hooks:install": "node scripts/install-git-hooks.mjs",
+    "hooks:test:pre-push": "node scripts/test-pre-push-hook.mjs",
+    "compliance:app-code": "node scripts/compliance/check-app-code.mjs",
+    "compliance:sbd": "node scripts/compliance/check-sbd-mechanical.mjs",
+    "compliance:stack": "node scripts/compliance/check-stack-compliance.mjs",
+    "compliance:all": "npm run compliance:app-code && npm run compliance:sbd && npm run compliance:stack",
     "test:env:start": "bash scripts/test-start.sh",
     "test:env:stop": "bash scripts/test-stop.sh",
     "test:integration": "bash scripts/test-run.sh"

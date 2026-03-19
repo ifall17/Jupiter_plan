@@ -1,7 +1,7 @@
 import { INestApplication, CanActivate, ExecutionContext } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
+import ExcelJS from 'exceljs';
 import * as request from 'supertest';
-import * as XLSX from 'xlsx';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { OrgGuard } from '../../common/guards/org.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
@@ -20,14 +20,13 @@ class PassThroughGuard implements CanActivate {
   }
 }
 
-function buildXlsxBuffer(): Buffer {
-  const wb = XLSX.utils.book_new();
-  const ws = XLSX.utils.aoa_to_sheet([
-    ['account_code', 'account_label', 'department', 'line_type', 'amount', 'transaction_date'],
-    ['701000', 'Ventes', 'VENTES', 'revenue', '5000', '2026-03-01'],
-  ]);
-  XLSX.utils.book_append_sheet(wb, ws, 'Import');
-  return XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' }) as Buffer;
+async function buildXlsxBuffer(): Promise<Buffer> {
+  const workbook = new ExcelJS.Workbook();
+  const sheet = workbook.addWorksheet('Import');
+  sheet.addRow(['account_code', 'account_label', 'department', 'line_type', 'amount', 'transaction_date']);
+  sheet.addRow(['701000', 'Ventes', 'VENTES', 'revenue', '5000', '2026-03-01']);
+  const buffer = await workbook.xlsx.writeBuffer();
+  return Buffer.from(buffer);
 }
 
 describe('ImportsController multipart validation (integration)', () => {
@@ -92,7 +91,7 @@ describe('ImportsController multipart validation (integration)', () => {
 
     const res = await request(app.getHttpServer())
       .post('/imports/upload')
-      .attach('file', buildXlsxBuffer(), {
+      .attach('file', await buildXlsxBuffer(), {
         filename: 'import.xlsx',
         contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
       })

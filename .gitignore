@@ -1,4 +1,22 @@
 # Test environment files - local credentials only
 apps/api/.env.test
 .env.test
+
+# Dependencies
 node_modules
+
+# Build artifacts
+dist/
+apps/web/dist/
+apps/api/dist/
+
+# Test/report artifacts
+playwright-report/
+apps/web/playwright-report/
+coverage/
+apps/web/coverage/
+test-results/
+apps/web/test-results/
+
+# TypeScript incremental outputs
+*.tsbuildinfo

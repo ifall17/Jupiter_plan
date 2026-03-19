@@ -128,68 +128,75 @@ let ScenariosRepository = class ScenariosRepository {
         const periodId = lines[0].period_id;
         let revenue = lines
             .filter((line) => line.line_type === client_1.LineType.REVENUE)
-            .reduce((sum, line) => sum + Number(line.amount_budget), 0);
+            .reduce((sum, line) => sum.plus(line.amount_budget), new client_1.Prisma.Decimal('0'));
         let expenses = lines
             .filter((line) => line.line_type === client_1.LineType.EXPENSE)
-            .reduce((sum, line) => sum + Number(line.amount_budget), 0);
+            .reduce((sum, line) => sum.plus(line.amount_budget), new client_1.Prisma.Decimal('0'));
         let capex = lines
             .filter((line) => line.line_type === client_1.LineType.CAPEX)
-            .reduce((sum, line) => sum + Number(line.amount_budget), 0);
+            .reduce((sum, line) => sum.plus(line.amount_budget), new client_1.Prisma.Decimal('0'));
         for (const hypothesis of params.hypotheses) {
             const param = hypothesis.parameter.trim().toLowerCase();
-            const value = Number.parseFloat(hypothesis.value);
-            if (!Number.isFinite(value)) {
+            let value;
+            try {
+                value = new client_1.Prisma.Decimal(hypothesis.value);
+            }
+            catch {
                 continue;
             }
             if (param === 'revenue_growth') {
                 if (hypothesis.unit === '%') {
-                    revenue *= 1 + value / 100;
+                    revenue = revenue.mul(new client_1.Prisma.Decimal('1').plus(value.div(new client_1.Prisma.Decimal('100'))));
                 }
                 else if (hypothesis.unit === 'FCFA') {
-                    revenue += value;
+                    revenue = revenue.plus(value);
                 }
                 else if (hypothesis.unit === 'multiplier') {
-                    revenue *= value;
+                    revenue = revenue.mul(value);
                 }
             }
             if (param === 'cost_reduction') {
                 if (hypothesis.unit === '%') {
-                    expenses *= 1 - value / 100;
+                    expenses = expenses.mul(new client_1.Prisma.Decimal('1').minus(value.div(new client_1.Prisma.Decimal('100'))));
                 }
                 else if (hypothesis.unit === 'FCFA') {
-                    expenses = Math.max(0, expenses - value);
+                    const reduced = expenses.minus(value);
+                    expenses = reduced.lt(new client_1.Prisma.Decimal('0')) ? new client_1.Prisma.Decimal('0') : reduced;
                 }
                 else if (hypothesis.unit === 'multiplier') {
-                    expenses *= value;
+                    expenses = expenses.mul(value);
                 }
             }
             if (param === 'capex_increase') {
                 if (hypothesis.unit === '%') {
-                    capex *= 1 + value / 100;
+                    capex = capex.mul(new client_1.Prisma.Decimal('1').plus(value.div(new client_1.Prisma.Decimal('100'))));
                 }
                 else if (hypothesis.unit === 'FCFA') {
-                    capex += value;
+                    capex = capex.plus(value);
                 }
                 else if (hypothesis.unit === 'multiplier') {
-                    capex *= value;
+                    capex = capex.mul(value);
                 }
             }
         }
-        const ebitda = revenue - expenses;
-        const net = ebitda - capex;
-        const toDecimal = (n) => new client_1.Prisma.Decimal(n.toFixed(2));
+        const ebitda = revenue.minus(expenses);
+        const net = ebitda.minus(capex);
+        const toMoney = (d) => d.toDecimalPlaces(2, client_1.Prisma.Decimal.ROUND_HALF_UP);
+        const totalExpenses = expenses.plus(capex);
+        const assets = revenue.mul(new client_1.Prisma.Decimal('0.6'));
+        const liabilities = totalExpenses.mul(new client_1.Prisma.Decimal('0.45'));
         return {
             period_id: periodId,
-            is_revenue: toDecimal(revenue),
-            is_expenses: toDecimal(expenses + capex),
-            is_ebitda: toDecimal(ebitda),
-            is_net: toDecimal(net),
-            bs_assets: toDecimal(revenue * 0.6),
-            bs_liabilities: toDecimal((expenses + capex) * 0.45),
-            bs_equity: toDecimal(revenue * 0.6 - (expenses + capex) * 0.45),
-            cf_operating: toDecimal(ebitda),
-            cf_investing: toDecimal(-capex),
-            cf_financing: toDecimal(0),
+            is_revenue: toMoney(revenue),
+            is_expenses: toMoney(totalExpenses),
+            is_ebitda: toMoney(ebitda),
+            is_net: toMoney(net),
+            bs_assets: toMoney(assets),
+            bs_liabilities: toMoney(liabilities),
+            bs_equity: toMoney(assets.minus(liabilities)),
+            cf_operating: toMoney(ebitda),
+            cf_investing: toMoney(capex.negated()),
+            cf_financing: new client_1.Prisma.Decimal('0'),
         };
     }
     async upsertScenarioSnapshot(params) {

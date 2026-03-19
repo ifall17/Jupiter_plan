@@ -121,11 +121,17 @@ let TransactionsService = class TransactionsService {
     }
     async create(currentUser, dto) {
         await this.ensurePeriodBelongsToOrg(dto.period_id, currentUser.org_id);
-        const amount = Number.parseFloat(dto.amount);
-        if (!Number.isFinite(amount) || amount <= 0) {
+        let amount;
+        try {
+            amount = new client_1.Prisma.Decimal(dto.amount);
+        }
+        catch {
             throw new common_1.BadRequestException('Amount must be positive');
         }
-        const signedAmount = dto.line_type === client_1.LineType.EXPENSE ? -amount : amount;
+        if (amount.lte(new client_1.Prisma.Decimal('0'))) {
+            throw new common_1.BadRequestException('Amount must be positive');
+        }
+        const signedAmount = dto.line_type === client_1.LineType.EXPENSE ? amount.abs().negated() : amount.abs();
         const transaction = await this.prisma.transaction.create({
             data: {
                 org_id: currentUser.org_id,
@@ -133,7 +139,7 @@ let TransactionsService = class TransactionsService {
                 account_code: dto.account_code.trim(),
                 account_label: dto.label.trim(),
                 department: dto.department,
-                amount: new client_1.Prisma.Decimal(signedAmount.toFixed(2)),
+                amount: signedAmount.toDecimalPlaces(2, client_1.Prisma.Decimal.ROUND_HALF_UP),
                 created_at: new Date(dto.transaction_date),
             },
             include: { period: { select: { id: true, label: true } } },
@@ -157,7 +163,7 @@ let TransactionsService = class TransactionsService {
         }
     }
     toResponse(item) {
-        const numericAmount = Number(item.amount);
+        const isRevenue = item.amount.gte(new client_1.Prisma.Decimal('0'));
         return {
             id: item.id,
             period_id: item.period_id,
@@ -165,8 +171,8 @@ let TransactionsService = class TransactionsService {
             account_code: item.account_code,
             label: item.account_label,
             department: item.department,
-            line_type: numericAmount >= 0 ? client_1.LineType.REVENUE : client_1.LineType.EXPENSE,
-            amount: Math.abs(numericAmount).toFixed(2),
+            line_type: isRevenue ? client_1.LineType.REVENUE : client_1.LineType.EXPENSE,
+            amount: item.amount.abs().toDecimalPlaces(2, client_1.Prisma.Decimal.ROUND_HALF_UP).toString(),
             is_validated: item.is_validated,
             created_at: item.created_at,
         };

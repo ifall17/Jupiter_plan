@@ -6,9 +6,13 @@ interface Period {
 
 interface PeriodSelectorProps {
   currentPeriod: Period;
+  periods?: Period[];
+  onPeriodChange?: (period: Period) => void;
 }
 
-export default function PeriodSelector({ currentPeriod }: PeriodSelectorProps) {
+export default function PeriodSelector({ currentPeriod, periods = [currentPeriod], onPeriodChange }: PeriodSelectorProps) {
+  const selectedPeriods = periods.length > 0 ? periods : [currentPeriod];
+
   return (
     <div
       style={{
@@ -19,8 +23,11 @@ export default function PeriodSelector({ currentPeriod }: PeriodSelectorProps) {
     >
       <select
         value={currentPeriod.id}
-        onChange={() => {
-          // TODO: implémenter le changement de période
+        onChange={(event) => {
+          const next = selectedPeriods.find((period) => period.id === event.target.value);
+          if (next && onPeriodChange) {
+            onPeriodChange(next);
+          }
         }}
         style={{
           padding: '8px 12px',
@@ -32,7 +39,11 @@ export default function PeriodSelector({ currentPeriod }: PeriodSelectorProps) {
           cursor: 'pointer',
         }}
       >
-        <option value={currentPeriod.id}>{currentPeriod.label}</option>
+        {selectedPeriods.map((period) => (
+          <option key={period.id} value={period.id}>
+            {period.label}
+          </option>
+        ))}
       </select>
     </div>
   );

@@ -9,6 +9,27 @@ permissions:
   contents: read
 
 jobs:
+  compliance-gate:
+    name: Compliance Gate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@f43a0e5ff2bd294095638e18286ca9a3d1956744
+
+      - name: Setup Node
+        uses: actions/setup-node@60edb5dd545a775178f52524783378180af0d1f8
+        with:
+          node-version: 20
+
+      - name: App code policy (no console/alert, TODO ticketed)
+        run: node scripts/compliance/check-app-code.mjs
+
+      - name: SBD mechanical controls
+        run: node scripts/compliance/check-sbd-mechanical.mjs
+
+      - name: Stack compliance alignment
+        run: node scripts/compliance/check-stack-compliance.mjs
+
   api-security-gate:
     name: API Security Gate
     runs-on: ubuntu-latest

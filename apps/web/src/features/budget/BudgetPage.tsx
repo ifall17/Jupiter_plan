@@ -1,10 +1,14 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useForm } from 'react-hook-form';
+import { zodResolver } from '@hookform/resolvers/zod';
+import { z } from 'zod';
 import { useOrgStore } from '../../stores/org.store';
 import apiClient, { unwrapApiData } from '../../api/client';
 import { formatDate } from '../../utils/date';
 import { formatFCFA } from '../../utils/currency';
+import { emitAppError } from '../../utils/notifications';
 
 type BudgetLine = {
   id: string;
@@ -36,6 +40,14 @@ type Budget = {
 type PaginatedBudgets = { data: Budget[]; total: number; page: number; limit: number };
 type FiscalYear = { id: string; label: string };
 
+const createBudgetSchema = z.object({
+  name: z.string().trim().min(1, 'Le nom du budget est obligatoire'),
+  fiscal_year_id: z.string().min(1, 'Veuillez selectionner un exercice fiscal'),
+  parent_budget_id: z.string().optional(),
+});
+
+type CreateBudgetFormValues = z.infer<typeof createBudgetSchema>;
+
 const STATUS: Record<string, { bg: string; color: string; label: string }> = {
   DRAFT:     { bg: 'var(--surface2)',    color: 'var(--text-md)',  label: 'Brouillon' },
   SUBMITTED: { bg: 'var(--indigo-lt)',   color: 'var(--indigo)',   label: 'Soumis' },
@@ -64,9 +76,25 @@ export default function BudgetPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [showCreateModal, setShowCreateModal] = useState(false);
-  const [form, setForm] = useState({ name: '', fiscal_year_id: '', parent_budget_id: '' });
   const [isCreating, setIsCreating] = useState(false);
-  const [error, setError] = useState('');
+  const [submitError, setSubmitError] = useState('');
+  const {
+    register,
+    handleSubmit,
+    watch,
+    setValue,
+    reset,
+    clearErrors,
+    formState: { errors },
+  } = useForm<CreateBudgetFormValues>({
+    resolver: zodResolver(createBudgetSchema),
+    defaultValues: {
+      name: '',
+      fiscal_year_id: '',
+      parent_budget_id: '',
+    },
+  });
+  const selectedFiscalYearId = watch('fiscal_year_id');
 
   const { data, isLoading, isError: isListError } = useQuery({
     queryKey: ['budgets', fiscalYearId],
@@ -101,35 +129,26 @@ export default function BudgetPage() {
     0,
   );
 
-  async function handleCreate() {
-    if (!form.name.trim()) {
-      setError('Le nom du budget est obligatoire');
-      return;
-    }
-    if (!form.fiscal_year_id) {
-      setError('Veuillez selectionner un exercice fiscal');
-      return;
-    }
-
+  const handleCreate = handleSubmit(async (values) => {
     setIsCreating(true);
-    setError('');
+    setSubmitError('');
     try {
       const res = await apiClient.post<Budget>('/budgets', {
-        name: form.name.trim(),
-        fiscal_year_id: form.fiscal_year_id,
-        parent_budget_id: form.parent_budget_id || undefined,
+        name: values.name.trim(),
+        fiscal_year_id: values.fiscal_year_id,
+        parent_budget_id: values.parent_budget_id || undefined,
       });
       void queryClient.invalidateQueries({ queryKey: ['budgets'] });
       const created = unwrapApiData(res);
       setShowCreateModal(false);
-      setForm({ name: '', fiscal_year_id: '', parent_budget_id: '' });
+      reset({ name: '', fiscal_year_id: '', parent_budget_id: '' });
       navigate(`/budget/${created.id}`);
     } catch (err: any) {
-      setError(err.response?.data?.message ?? 'Erreur lors de la creation');
+      setSubmitError(err.response?.data?.message ?? 'Erreur lors de la creation');
     } finally {
       setIsCreating(false);
     }
-  }
+  });
 
   async function handleDeleteBudget(budget: Budget) {
     if (!window.confirm(`Supprimer le budget \"${budget.name}\" ?`)) {
@@ -142,7 +161,7 @@ export default function BudgetPage() {
       await queryClient.invalidateQueries({ queryKey: ['budgets'] });
     } catch (err: any) {
       const message = err.response?.data?.message ?? 'Suppression impossible';
-      window.alert(Array.isArray(message) ? message.join(', ') : message);
+      emitAppError(Array.isArray(message) ? message.join(', ') : message);
     } finally {
       setDeletingId(null);
     }
@@ -155,7 +174,7 @@ export default function BudgetPage() {
   }
 
   const lockedBudgetsForFiscalYear = budgets.filter(
-    (b) => b.status === 'LOCKED' && b.fiscal_year_id === form.fiscal_year_id,
+    (b) => b.status === 'LOCKED' && b.fiscal_year_id === selectedFiscalYearId,
   );
 
   return (
@@ -172,8 +191,9 @@ export default function BudgetPage() {
         <button
           onClick={() => {
             setShowCreateModal(true);
-            setError('');
-            setForm((prev) => ({ ...prev, fiscal_year_id: prev.fiscal_year_id || fiscalYearId || '' }));
+            setSubmitError('');
+            clearErrors();
+            setValue('fiscal_year_id', selectedFiscalYearId || fiscalYearId || '');
           }}
           style={{
             padding: '9px 20px',
@@ -376,8 +396,7 @@ export default function BudgetPage() {
                 Nom du budget *
               </label>
               <input
-                value={form.name}
-                onChange={(e) => setForm({ ...form, name: e.target.value })}
+                {...register('name')}
                 placeholder="Ex: Budget FY2026 V2"
                 style={{
                   width: '100%',
@@ -389,6 +408,7 @@ export default function BudgetPage() {
                   fontFamily: 'var(--font-body)',
                 }}
               />
+              {errors.name ? <p style={{ color: 'var(--terra)', fontSize: 12, marginTop: 6 }}>{errors.name.message}</p> : null}
             </div>
 
             <div style={{ marginBottom: 24 }}>
@@ -404,8 +424,7 @@ export default function BudgetPage() {
                 Exercice fiscal *
               </label>
               <select
-                value={form.fiscal_year_id}
-                onChange={(e) => setForm({ ...form, fiscal_year_id: e.target.value })}
+                {...register('fiscal_year_id')}
                 style={{
                   width: '100%',
                   padding: '10px 14px',
@@ -423,6 +442,7 @@ export default function BudgetPage() {
                   </option>
                 ))}
               </select>
+              {errors.fiscal_year_id ? <p style={{ color: 'var(--terra)', fontSize: 12, marginTop: 6 }}>{errors.fiscal_year_id.message}</p> : null}
             </div>
 
             <div style={{ marginBottom: 24 }}>
@@ -438,8 +458,7 @@ export default function BudgetPage() {
                 Ce budget est un reforecast de :
               </label>
               <select
-                value={form.parent_budget_id}
-                onChange={(e) => setForm({ ...form, parent_budget_id: e.target.value })}
+                {...register('parent_budget_id')}
                 style={{
                   width: '100%',
                   padding: '10px 14px',
@@ -459,14 +478,14 @@ export default function BudgetPage() {
               </select>
             </div>
 
-            {error && <p style={{ color: 'var(--terra)', fontSize: 12, marginBottom: 16 }}>{error}</p>}
+            {submitError ? <p style={{ color: 'var(--terra)', fontSize: 12, marginBottom: 16 }}>{submitError}</p> : null}
 
             <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
               <button
                 onClick={() => {
                   setShowCreateModal(false);
-                  setForm({ name: '', fiscal_year_id: '', parent_budget_id: '' });
-                  setError('');
+                  reset({ name: '', fiscal_year_id: '', parent_budget_id: '' });
+                  setSubmitError('');
                 }}
                 style={{
                   padding: '9px 20px',

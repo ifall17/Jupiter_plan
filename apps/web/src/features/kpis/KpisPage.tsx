@@ -5,6 +5,7 @@ import apiClient, { unwrapApiData } from '../../api/client';
 import { formatFCFA } from '../../utils/currency';
 import { usePeriodStore } from '../../stores/period.store';
 import { kpiValueSchema, parseFinancialPayload, type KpiValue } from '../../contracts/financial.schemas';
+import { emitAppError, emitAppNotification } from '../../utils/notifications';
 
 
 function getStatus(kpi: KpiValue): string {
@@ -51,20 +52,20 @@ export default function KpisPage() {
   });
 
   const handleCalculate = async () => {
-    console.log('Period ID:', currentPeriodId);
     if (!currentPeriodId) {
-      alert('Aucune période sélectionnée - changer la période en haut de page');
+      emitAppError('Aucune période sélectionnée - changer la période en haut de page');
       return;
     }
     setIsCalculating(true);
     try {
       await apiClient.post('/kpis/calculate', { period_id: currentPeriodId });
+      emitAppNotification({ message: 'Calcul KPI lancé', severity: 'INFO' });
       setTimeout(() => {
         queryClient.invalidateQueries({ queryKey: ['kpi-values'] });
         setIsCalculating(false);
       }, 2000);
     } catch (err: unknown) {
-      console.error('Erreur calcul KPIs:', err);
+      emitAppError('Erreur lors du calcul des KPIs');
       setIsCalculating(false);
     }
   };

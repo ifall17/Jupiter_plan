@@ -10,11 +10,31 @@ var __metadata = (this && this.__metadata) || function (k, v) {
 };
 var ImportsService_1;
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.ImportsService = void 0;
+exports.ImportsService = exports.MAX_IMPORT_FILE_SIZE_BYTES = void 0;
 const common_1 = require("@nestjs/common");
+const crypto_1 = require("crypto");
 const client_1 = require("@prisma/client");
+const enums_1 = require("../../shared/enums");
 const XLSX = require("xlsx");
+const audit_service_1 = require("../../common/services/audit.service");
 const prisma_service_1 = require("../../prisma/prisma.service");
+exports.MAX_IMPORT_FILE_SIZE_BYTES = 10 * 1024 * 1024;
+const ALLOWED_IMPORT_MIME_TYPES = new Set([
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+]);
+function importBadRequest(code, message, details) {
+    return new common_1.BadRequestException({ code, message, ...(details ? { details } : {}) });
+}
+function isAllowedImportMimeType(mimetype) {
+    return typeof mimetype === 'string' && ALLOWED_IMPORT_MIME_TYPES.has(mimetype);
+}
+function hasXlsxZipSignature(buffer) {
+    if (buffer.length < 4) {
+        return false;
+    }
+    const signature = buffer.subarray(0, 4).toString('hex').toUpperCase();
+    return signature === '504B0304' || signature === '504B0506' || signature === '504B0708';
+}
 function normalizeHeader(value) {
     return String(value ?? '')
         .trim()
@@ -23,15 +43,42 @@ function normalizeHeader(value) {
         .replace(/[\u0300-\u036f]/g, '')
         .replace(/[^a-z0-9]/g, '');
 }
-function readAmount(value) {
-    if (typeof value === 'number') {
-        return value;
-    }
-    const normalized = String(value ?? '')
+function normalizeAmountString(value) {
+    const raw = String(value ?? '')
+        .trim()
         .replace(/\s/g, '')
-        .replace(/,/g, '.')
-        .replace(/[A-Za-z$€£¥₣]/g, '');
-    return Number.parseFloat(normalized);
+        .replace(/[A-Za-z$€£¥₣]/g, '')
+        .replace(/'/g, '');
+    if (!raw) {
+        return '';
+    }
+    const lastComma = raw.lastIndexOf(',');
+    const lastDot = raw.lastIndexOf('.');
+    if (lastComma !== -1 && lastDot !== -1) {
+        if (lastComma > lastDot) {
+            return raw.replace(/\./g, '').replace(/,/g, '.');
+        }
+        return raw.replace(/,/g, '');
+    }
+    if (lastComma !== -1) {
+        return raw.replace(/,/g, '.');
+    }
+    return raw;
+}
+function readAmount(value) {
+    const normalized = normalizeAmountString(value);
+    if (!normalized || !/^-?\d+(\.\d+)?$/.test(normalized)) {
+        return null;
+    }
+    try {
+        return new client_1.Prisma.Decimal(normalized);
+    }
+    catch {
+        return null;
+    }
+}
+function buildServerFileName() {
+    return `import_${(0, crypto_1.randomUUID)()}.xlsx`;
 }
 function parseLineType(raw) {
     const normalized = normalizeHeader(raw);
@@ -44,27 +91,39 @@ function parseLineType(raw) {
     return null;
 }
 let ImportsService = ImportsService_1 = class ImportsService {
-    constructor(prisma) {
+    constructor(prisma, auditService) {
         this.prisma = prisma;
+        this.auditService = auditService;
         this.logger = new common_1.Logger(ImportsService_1.name);
     }
-    async processImport(file, periodId, orgId, createdBy) {
+    async processImport(file, periodId, orgId, createdBy, ipAddress) {
         if (!file) {
-            throw new common_1.BadRequestException('File is required');
+            throw importBadRequest('IMPORT_FILE_REQUIRED', 'File is required');
         }
-        if (!file.originalname.toLowerCase().endsWith('.xlsx')) {
-            throw new common_1.BadRequestException('Only .xlsx files are supported');
+        if (!isAllowedImportMimeType(file.mimetype)) {
+            throw importBadRequest('IMPORT_FILE_TYPE_INVALID', 'Only .xlsx MIME types are supported', {
+                mimetype: file.mimetype ?? null,
+            });
         }
-        if (file.size > 10 * 1024 * 1024) {
-            throw new common_1.BadRequestException('File too large');
+        if (!hasXlsxZipSignature(file.buffer)) {
+            throw importBadRequest('IMPORT_FILE_SIGNATURE_INVALID', 'The uploaded file is not a valid .xlsx archive');
+        }
+        if (file.size > exports.MAX_IMPORT_FILE_SIZE_BYTES) {
+            throw importBadRequest('IMPORT_FILE_TOO_LARGE', 'File too large', {
+                max_bytes: exports.MAX_IMPORT_FILE_SIZE_BYTES,
+            });
         }
         const period = await this.prisma.period.findFirst({
             where: { id: periodId, fiscal_year: { org_id: orgId } },
             select: { id: true },
         });
         if (!period) {
-            throw new common_1.UnauthorizedException();
+            throw new common_1.UnauthorizedException({
+                code: 'IMPORT_PERIOD_UNAUTHORIZED',
+                message: 'The selected period is not accessible for this organization',
+            });
         }
+        const safeFileName = buildServerFileName();
         const job = await this.prisma.importJob.create({
             data: {
                 org_id: orgId,
@@ -72,9 +131,23 @@ let ImportsService = ImportsService_1 = class ImportsService {
                 created_by: createdBy,
                 source: client_1.ImportSource.EXCEL,
                 status: client_1.ImportStatus.PENDING,
-                file_name: file.originalname,
+                file_name: safeFileName,
                 file_size_kb: Math.max(1, Math.round(file.size / 1024)),
                 started_at: new Date(),
+            },
+        });
+        await this.safeCreateAuditLog({
+            org_id: orgId,
+            user_id: createdBy,
+            action: enums_1.AuditAction.IMPORT_START,
+            entity_type: 'import_job',
+            entity_id: job.id,
+            ip_address: ipAddress,
+            metadata: {
+                source: client_1.ImportSource.EXCEL,
+                file_name: safeFileName,
+                file_size_kb: Math.max(1, Math.round(file.size / 1024)),
+                mimetype: file.mimetype ?? null,
             },
         });
         try {
@@ -86,24 +159,33 @@ let ImportsService = ImportsService_1 = class ImportsService {
             const sheetName = workbook.SheetNames[0];
             const sheet = sheetName ? workbook.Sheets[sheetName] : undefined;
             if (!sheet) {
-                throw new common_1.BadRequestException('Workbook is empty');
+                throw importBadRequest('IMPORT_WORKBOOK_EMPTY', 'Workbook is empty');
             }
-            const rows = XLSX.utils.sheet_to_json(sheet, { defval: '' });
+            const rows = XLSX.utils.sheet_to_json(sheet, { defval: '', raw: false });
             if (!rows.length) {
                 await this.prisma.importJob.update({
                     where: { id: job.id },
                     data: {
                         status: client_1.ImportStatus.FAILED,
-                        error_report: { message: 'Fichier vide ou format invalide' },
+                        error_report: { code: 'IMPORT_WORKBOOK_EMPTY', message: 'Fichier vide ou format invalide' },
                         completed_at: new Date(),
                     },
+                });
+                await this.safeCreateAuditLog({
+                    org_id: orgId,
+                    user_id: createdBy,
+                    action: enums_1.AuditAction.IMPORT_DONE,
+                    entity_type: 'import_job',
+                    entity_id: job.id,
+                    ip_address: ipAddress,
+                    metadata: { status: client_1.ImportStatus.FAILED, reason: 'IMPORT_WORKBOOK_EMPTY' },
                 });
                 return {
                     job_id: job.id,
                     status: client_1.ImportStatus.FAILED,
                     rows_inserted: 0,
                     rows_skipped: 0,
-                    error_report: { message: 'Fichier vide ou format invalide' },
+                    error_report: { code: 'IMPORT_WORKBOOK_EMPTY', message: 'Fichier vide ou format invalide' },
                 };
             }
             const transactions = [];
@@ -135,7 +217,7 @@ let ImportsService = ImportsService_1 = class ImportsService {
                     continue;
                 }
                 const parsedAmount = readAmount(amountValue);
-                if (!Number.isFinite(parsedAmount) || parsedAmount <= 0) {
+                if (!parsedAmount || parsedAmount.lte(0)) {
                     rowsSkipped += 1;
                     errors.push({ row: rowNumber, error: 'INVALID_AMOUNT', value: String(amountValue ?? '') });
                     continue;
@@ -147,8 +229,8 @@ let ImportsService = ImportsService_1 = class ImportsService {
                     continue;
                 }
                 const lineType = detectedLineType;
-                const absoluteAmount = Math.abs(parsedAmount);
-                const signedAmount = lineType === client_1.LineType.EXPENSE ? -absoluteAmount : absoluteAmount;
+                const absoluteAmount = parsedAmount.abs();
+                const signedAmount = lineType === client_1.LineType.EXPENSE ? absoluteAmount.negated() : absoluteAmount;
                 const transactionDate = transactionDateRaw instanceof Date ? transactionDateRaw : new Date(String(transactionDateRaw));
                 transactions.push({
                     org_id: orgId,
@@ -156,7 +238,7 @@ let ImportsService = ImportsService_1 = class ImportsService {
                     account_code: accountCode,
                     account_label: label,
                     department,
-                    amount: new client_1.Prisma.Decimal(signedAmount.toFixed(2)),
+                    amount: signedAmount.toDecimalPlaces(2),
                     import_job_id: job.id,
                     created_at: Number.isNaN(transactionDate.getTime()) ? new Date() : transactionDate,
                 });
@@ -183,6 +265,20 @@ let ImportsService = ImportsService_1 = class ImportsService {
                     error_report: true,
                 },
             });
+            await this.safeCreateAuditLog({
+                org_id: orgId,
+                user_id: createdBy,
+                action: enums_1.AuditAction.IMPORT_DONE,
+                entity_type: 'import_job',
+                entity_id: completedJob.id,
+                ip_address: ipAddress,
+                metadata: {
+                    status: completedJob.status,
+                    rows_inserted: completedJob.rows_inserted ?? 0,
+                    rows_skipped: completedJob.rows_skipped ?? 0,
+                    has_errors: errors.length > 0,
+                },
+            });
             return {
                 job_id: completedJob.id,
                 status: completedJob.status,
@@ -196,8 +292,23 @@ let ImportsService = ImportsService_1 = class ImportsService {
                 where: { id: job.id },
                 data: {
                     status: client_1.ImportStatus.FAILED,
-                    error_report: { message: 'Erreur de traitement du fichier' },
+                    error_report: {
+                        code: 'IMPORT_PROCESSING_FAILED',
+                        message: 'Erreur de traitement du fichier',
+                    },
                     completed_at: new Date(),
+                },
+            });
+            await this.safeCreateAuditLog({
+                org_id: orgId,
+                user_id: createdBy,
+                action: enums_1.AuditAction.IMPORT_DONE,
+                entity_type: 'import_job',
+                entity_id: job.id,
+                ip_address: ipAddress,
+                metadata: {
+                    status: client_1.ImportStatus.FAILED,
+                    error_code: error instanceof common_1.BadRequestException ? 'IMPORT_PROCESSING_FAILED' : 'IMPORT_PROCESSING_FAILED',
                 },
             });
             this.logger.error(`Import job ${job.id} failed`, error instanceof Error ? error.stack : undefined);
@@ -206,7 +317,7 @@ let ImportsService = ImportsService_1 = class ImportsService {
     }
     async upload(file, periodId, currentUser) {
         if (!file) {
-            throw new common_1.BadRequestException('File is required');
+            throw importBadRequest('IMPORT_FILE_REQUIRED', 'File is required');
         }
         return this.processImport(file, periodId, currentUser.org_id, currentUser.sub);
     }
@@ -230,10 +341,20 @@ let ImportsService = ImportsService_1 = class ImportsService {
         }
         return job;
     }
+    async safeCreateAuditLog(params) {
+        try {
+            await this.auditService.createLog(params);
+        }
+        catch (error) {
+            this.logger.warn(`Failed to persist audit log ${params.action} for ${params.entity_type}:${params.entity_id ?? 'n/a'}`);
+            this.logger.debug(error instanceof Error ? error.message : 'Unknown audit log error');
+        }
+    }
 };
 exports.ImportsService = ImportsService;
 exports.ImportsService = ImportsService = ImportsService_1 = __decorate([
     (0, common_1.Injectable)(),
-    __metadata("design:paramtypes", [prisma_service_1.PrismaService])
+    __metadata("design:paramtypes", [prisma_service_1.PrismaService,
+        audit_service_1.AuditService])
 ], ImportsService);
 //# sourceMappingURL=imports.service.js.map

@@ -1,9 +1,10 @@
 import { BadRequestException, Injectable, Logger, NotFoundException, UnauthorizedException } from '@nestjs/common';
 import { randomUUID } from 'crypto';
+import ExcelJS from 'exceljs';
 import { ImportSource, ImportStatus, LineType, Prisma, UserRole } from '@prisma/client';
 import { AuditAction } from '@shared/enums';
-import * as XLSX from 'xlsx';
 import { AuditService } from '../../common/services/audit.service';
+import { EventsGateway } from '../../common/services/events.gateway';
 import { PrismaService } from '../../prisma/prisma.service';
 
 export interface ImportsCurrentUser {
@@ -109,6 +110,73 @@ function parseLineType(raw: string): LineType | null {
   return null;
 }
 
+async function readWorkbookRows(buffer: Buffer): Promise<Array<Record<string, unknown>>> {
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(buffer);
+
+  const worksheet = workbook.worksheets[0];
+  if (!worksheet) {
+    return [];
+  }
+
+  const headerRow = worksheet.getRow(1);
+  const headers = headerRow.values
+    .slice(1)
+    .map((value) => String(value ?? '').trim());
+
+  if (headers.every((header) => header.length === 0)) {
+    return [];
+  }
+
+  const rows: Array<Record<string, unknown>> = [];
+
+  worksheet.eachRow((row, rowNumber) => {
+    if (rowNumber === 1) {
+      return;
+    }
+
+    const record: Record<string, unknown> = {};
+    let hasValue = false;
+
+    headers.forEach((header, index) => {
+      const cellValue = row.getCell(index + 1).value;
+      const normalizedValue = normalizeWorksheetCellValue(cellValue);
+      if (header) {
+        record[header] = normalizedValue;
+      }
+      if (String(normalizedValue ?? '').trim() !== '') {
+        hasValue = true;
+      }
+    });
+
+    if (hasValue) {
+      rows.push(record);
+    }
+  });
+
+  return rows;
+}
+
+function normalizeWorksheetCellValue(value: ExcelJS.CellValue | undefined): unknown {
+  if (value === null || value === undefined) {
+    return '';
+  }
+
+  if (value instanceof Date || typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+    return value;
+  }
+
+  if (typeof value === 'object' && 'text' in value && typeof value.text === 'string') {
+    return value.text;
+  }
+
+  if (typeof value === 'object' && 'result' in value) {
+    return normalizeWorksheetCellValue(value.result as ExcelJS.CellValue | undefined);
+  }
+
+  return String(value);
+}
+
 @Injectable()
 export class ImportsService {
   private readonly logger = new Logger(ImportsService.name);
@@ -116,6 +184,7 @@ export class ImportsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly auditService: AuditService,
+    private readonly eventsGateway: EventsGateway,
   ) {}
 
   async processImport(
@@ -189,41 +258,15 @@ export class ImportsService {
         data: { status: ImportStatus.PROCESSING },
       });
 
-      const workbook = XLSX.read(file.buffer, { type: 'buffer' });
-      const sheetName = workbook.SheetNames[0];
-      const sheet = sheetName ? workbook.Sheets[sheetName] : undefined;
-      if (!sheet) {
-        throw importBadRequest('IMPORT_WORKBOOK_EMPTY', 'Workbook is empty');
-      }
+      this.eventsGateway.emitToOrg(orgId, 'IMPORT_PROGRESS', {
+        job_id: job.id,
+        progress: 10,
+        status: ImportStatus.PROCESSING,
+      });
 
-      const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: '', raw: false });
+      const rows = await readWorkbookRows(file.buffer);
       if (!rows.length) {
-        await this.prisma.importJob.update({
-          where: { id: job.id },
-          data: {
-            status: ImportStatus.FAILED,
-            error_report: { code: 'IMPORT_WORKBOOK_EMPTY', message: 'Fichier vide ou format invalide' },
-            completed_at: new Date(),
-          },
-        });
-
-        await this.safeCreateAuditLog({
-          org_id: orgId,
-          user_id: createdBy,
-          action: AuditAction.IMPORT_DONE,
-          entity_type: 'import_job',
-          entity_id: job.id,
-          ip_address: ipAddress,
-          metadata: { status: ImportStatus.FAILED, reason: 'IMPORT_WORKBOOK_EMPTY' },
-        });
-
-        return {
-          job_id: job.id,
-          status: ImportStatus.FAILED,
-          rows_inserted: 0,
-          rows_skipped: 0,
-          error_report: { code: 'IMPORT_WORKBOOK_EMPTY', message: 'Fichier vide ou format invalide' },
-        };
+        throw importBadRequest('IMPORT_WORKBOOK_EMPTY', 'Workbook is empty');
       }
 
       const transactions: Prisma.TransactionCreateManyInput[] = [];
@@ -333,6 +376,13 @@ export class ImportsService {
         },
       });
 
+      this.eventsGateway.emitToOrg(orgId, 'IMPORT_DONE', {
+        job_id: completedJob.id,
+        inserted: completedJob.rows_inserted ?? 0,
+        skipped: completedJob.rows_skipped ?? 0,
+        status: completedJob.status,
+      });
+
       return {
         job_id: completedJob.id,
         status: completedJob.status,
@@ -364,6 +414,13 @@ export class ImportsService {
           status: ImportStatus.FAILED,
           error_code: error instanceof BadRequestException ? 'IMPORT_PROCESSING_FAILED' : 'IMPORT_PROCESSING_FAILED',
         },
+      });
+
+      this.eventsGateway.emitToOrg(orgId, 'IMPORT_DONE', {
+        job_id: job.id,
+        inserted: 0,
+        skipped: 0,
+        status: ImportStatus.FAILED,
       });
 
       this.logger.error(`Import job ${job.id} failed`, error instanceof Error ? error.stack : undefined);

@@ -1,5 +1,8 @@
 import { useEffect, useMemo, useState, type ChangeEvent, type DragEvent, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useForm } from 'react-hook-form';
+import { zodResolver } from '@hookform/resolvers/zod';
+import { z } from 'zod';
 import apiClient, { unwrapApiData } from '../../api/client';
 import { formatFCFA } from '../../utils/currency';
 import { formatDate } from '../../utils/date';
@@ -51,6 +54,29 @@ type ImportUploadPayload = {
   rows_skipped: number | null;
   error_report?: { message?: string } | ImportErrorItem[] | null;
 };
+
+const importExcelSchema = z.object({
+  period_id: z.string().min(1, 'Sélectionnez une période'),
+  file: z.instanceof(File, { message: 'Sélectionnez un fichier' }),
+});
+
+type ImportExcelFormValues = z.infer<typeof importExcelSchema>;
+
+const addTransactionSchema = z.object({
+  transaction_date: z.string().min(1, 'Tous les champs obligatoires doivent être remplis'),
+  account_code: z.string().trim().regex(/^\d{6}$/, 'Code SYSCOHADA invalide (6 chiffres obligatoires)'),
+  label: z.string().trim().min(1, 'Tous les champs obligatoires doivent être remplis'),
+  department: z.string().min(1, 'Tous les champs obligatoires doivent être remplis'),
+  line_type: z.enum(['REVENUE', 'EXPENSE']),
+  amount: z
+    .string()
+    .min(1, 'Le montant doit être un nombre positif')
+    .refine((value) => Number.isFinite(Number(value)) && Number(value) > 0, 'Le montant doit être un nombre positif'),
+  period_id: z.string().min(1, 'Tous les champs obligatoires doivent être remplis'),
+  notes: z.string().optional(),
+});
+
+type AddTransactionFormValues = z.infer<typeof addTransactionSchema>;
 
 function parseImportErrors(errorReport: unknown): ImportErrorItem[] {
   if (!Array.isArray(errorReport)) {
@@ -171,50 +197,42 @@ function AddTransactionModal({
   onClose: () => void;
   onSuccess: () => void;
 }) {
-  const [form, setForm] = useState({
-    transaction_date: new Date().toISOString().slice(0, 10),
-    account_code: '',
-    label: '',
-    department: departments[0],
-    line_type: 'REVENUE' as 'REVENUE' | 'EXPENSE',
-    amount: '',
-    period_id: periods[0]?.id ?? '',
-    notes: '',
-  });
   const [error, setError] = useState('');
+  const {
+    register,
+    handleSubmit,
+    formState: { errors },
+  } = useForm<AddTransactionFormValues>({
+    resolver: zodResolver(addTransactionSchema),
+    defaultValues: {
+      transaction_date: new Date().toISOString().slice(0, 10),
+      account_code: '',
+      label: '',
+      department: departments[0],
+      line_type: 'REVENUE',
+      amount: '',
+      period_id: periods[0]?.id ?? '',
+      notes: '',
+    },
+  });
 
   const createMutation = useMutation({
-    mutationFn: () =>
+    mutationFn: (values: AddTransactionFormValues) =>
       apiClient.post('/transactions', {
-        transaction_date: form.transaction_date,
-        account_code: form.account_code.trim(),
-        label: form.label.trim(),
-        department: form.department,
-        line_type: form.line_type,
-        amount: Number(form.amount).toFixed(2),
-        period_id: form.period_id,
-        notes: form.notes.trim() || undefined,
+        transaction_date: values.transaction_date,
+        account_code: values.account_code.trim(),
+        label: values.label.trim(),
+        department: values.department,
+        line_type: values.line_type,
+        amount: Number(values.amount).toFixed(2),
+        period_id: values.period_id,
+        notes: values.notes?.trim() || undefined,
       }),
     onSuccess: () => onSuccess(),
     onError: (err: any) => {
       setError(err.response?.data?.message ?? 'Erreur lors de la création');
     },
   });
-
-  const handleSubmit = () => {
-    if (!form.transaction_date || !/^\d{6}$/.test(form.account_code.trim()) || !form.label.trim() || !form.period_id) {
-      setError('Tous les champs obligatoires doivent être remplis');
-      return;
-    }
-
-    if (!Number.isFinite(Number(form.amount)) || Number(form.amount) <= 0) {
-      setError('Le montant doit être un nombre positif');
-      return;
-    }
-
-    setError('');
-    createMutation.mutate();
-  };
 
   return (
     <ModalShell title="Saisir une transaction" onClose={onClose}>
@@ -224,35 +242,33 @@ function AddTransactionModal({
           <input
             id="transaction-date"
             type="date"
-            value={form.transaction_date}
-            onChange={(event) => setForm({ ...form, transaction_date: event.target.value })}
+            {...register('transaction_date')}
             className="tx-form-control"
           />
         </div>
         <div>
           <FieldLabel>Code comptable SYSCOHADA *</FieldLabel>
           <input
-            value={form.account_code}
-            onChange={(event) => setForm({ ...form, account_code: event.target.value })}
+            {...register('account_code')}
             placeholder="701000"
             style={{ width: '100%', border: '1px solid var(--border)', borderRadius: 8, padding: '10px 14px', fontSize: 13 }}
           />
+          {errors.account_code ? <p style={{ marginTop: 6, marginBottom: 0, color: 'var(--terra)', fontSize: 12 }}>{errors.account_code.message}</p> : null}
         </div>
         <div>
           <FieldLabel>Libellé *</FieldLabel>
           <input
-            value={form.label}
-            onChange={(event) => setForm({ ...form, label: event.target.value })}
+            {...register('label')}
             placeholder="Ex: Vente locale"
             style={{ width: '100%', border: '1px solid var(--border)', borderRadius: 8, padding: '10px 14px', fontSize: 13 }}
           />
+          {errors.label ? <p style={{ marginTop: 6, marginBottom: 0, color: 'var(--terra)', fontSize: 12 }}>{errors.label.message}</p> : null}
         </div>
         <div style={{ display: 'grid', gap: 10, gridTemplateColumns: 'repeat(2, minmax(0, 1fr))' }}>
           <div>
             <FieldLabel>Département *</FieldLabel>
             <select
-              value={form.department}
-              onChange={(event) => setForm({ ...form, department: event.target.value })}
+              {...register('department')}
               style={{ width: '100%', border: '1px solid var(--border)', borderRadius: 8, padding: '10px 14px', fontSize: 13 }}
             >
               {departments.map((department) => (
@@ -265,8 +281,7 @@ function AddTransactionModal({
           <div>
             <FieldLabel>Type *</FieldLabel>
             <select
-              value={form.line_type}
-              onChange={(event) => setForm({ ...form, line_type: event.target.value as 'REVENUE' | 'EXPENSE' })}
+              {...register('line_type')}
               style={{ width: '100%', border: '1px solid var(--border)', borderRadius: 8, padding: '10px 14px', fontSize: 13 }}
             >
               <option value="REVENUE">REVENUE</option>
@@ -281,16 +296,15 @@ function AddTransactionModal({
               type="number"
               min="0"
               step="0.01"
-              value={form.amount}
-              onChange={(event) => setForm({ ...form, amount: event.target.value })}
+              {...register('amount')}
               style={{ width: '100%', border: '1px solid var(--border)', borderRadius: 8, padding: '10px 14px', fontSize: 13 }}
             />
+            {errors.amount ? <p style={{ marginTop: 6, marginBottom: 0, color: 'var(--terra)', fontSize: 12 }}>{errors.amount.message}</p> : null}
           </div>
           <div>
             <FieldLabel>Période *</FieldLabel>
             <select
-              value={form.period_id}
-              onChange={(event) => setForm({ ...form, period_id: event.target.value })}
+              {...register('period_id')}
               style={{ width: '100%', border: '1px solid var(--border)', borderRadius: 8, padding: '10px 14px', fontSize: 13 }}
             >
               <option value="">Sélectionner une période</option>
@@ -300,13 +314,13 @@ function AddTransactionModal({
                 </option>
               ))}
             </select>
+            {errors.period_id ? <p style={{ marginTop: 6, marginBottom: 0, color: 'var(--terra)', fontSize: 12 }}>{errors.period_id.message}</p> : null}
           </div>
         </div>
         <div>
           <FieldLabel>Notes</FieldLabel>
           <textarea
-            value={form.notes}
-            onChange={(event) => setForm({ ...form, notes: event.target.value })}
+            {...register('notes')}
             rows={3}
             style={{ width: '100%', resize: 'vertical', border: '1px solid var(--border)', borderRadius: 8, padding: '10px 14px', fontSize: 13 }}
           />
@@ -323,7 +337,10 @@ function AddTransactionModal({
         </button>
         <button
           type="button"
-          onClick={handleSubmit}
+          onClick={handleSubmit((values) => {
+            setError('');
+            createMutation.mutate(values);
+          })}
           disabled={createMutation.isPending}
           style={{
             padding: '8px 18px',
@@ -351,22 +368,31 @@ function ImportExcelModal({
   onClose: () => void;
   onSuccess: () => void;
 }) {
-  const [file, setFile] = useState<File | null>(null);
-  const [periodId, setPeriodId] = useState(periods[0]?.id ?? '');
   const [error, setError] = useState('');
   const [previewRows, setPreviewRows] = useState<string[][]>([]);
   const [importResult, setImportResult] = useState<ImportJob | null>(null);
   const importErrors = useMemo(() => parseImportErrors(importResult?.error_report), [importResult?.error_report]);
+  const {
+    register,
+    setValue,
+    watch,
+    clearErrors,
+    handleSubmit,
+    formState: { errors },
+  } = useForm<ImportExcelFormValues>({
+    resolver: zodResolver(importExcelSchema),
+    defaultValues: {
+      period_id: periods[0]?.id ?? '',
+    },
+  });
+  const selectedFile = watch('file');
+  const periodId = watch('period_id');
 
   const importMutation = useMutation({
-    mutationFn: async () => {
-      if (!file) {
-        throw new Error('Aucun fichier sélectionné');
-      }
-
+    mutationFn: async (values: ImportExcelFormValues) => {
       const formData = new FormData();
-      formData.append('file', file);
-      formData.append('period_id', periodId);
+      formData.append('file', values.file);
+      formData.append('period_id', values.period_id);
 
       return apiClient
         .post<{
@@ -425,7 +451,8 @@ function ImportExcelModal({
     }
 
     setError('');
-    setFile(selectedFile);
+    clearErrors('file');
+    setValue('file', selectedFile, { shouldValidate: true, shouldDirty: true });
     setImportResult(null);
 
     setPreviewRows([]);
@@ -460,8 +487,7 @@ function ImportExcelModal({
         <div>
           <FieldLabel>Période *</FieldLabel>
           <select
-            value={periodId}
-            onChange={(event) => setPeriodId(event.target.value)}
+            {...register('period_id')}
             style={{ width: '100%', border: '1px solid var(--border)', borderRadius: 8, padding: '10px 14px', fontSize: 13 }}
           >
             <option value="">Sélectionner une période</option>
@@ -471,6 +497,8 @@ function ImportExcelModal({
               </option>
             ))}
           </select>
+          {errors.period_id ? <p style={{ marginTop: 6, color: 'var(--terra)', fontSize: 12 }}>{errors.period_id.message}</p> : null}
+          {errors.file ? <p style={{ marginTop: 6, color: 'var(--terra)', fontSize: 12 }}>{errors.file.message}</p> : null}
         </div>
 
         {previewRows.length > 0 ? (
@@ -540,21 +568,11 @@ function ImportExcelModal({
         </button>
         <button
           type="button"
-          onClick={() => {
-            if (!file) {
-              setError('Sélectionnez un fichier');
-              return;
-            }
-
-            if (!periodId) {
-              setError('Sélectionnez une période');
-              return;
-            }
-
+          onClick={handleSubmit((values) => {
             setError('');
-            importMutation.mutate();
-          }}
-          disabled={!file || !periodId || importMutation.isPending}
+            importMutation.mutate(values);
+          })}
+          disabled={!selectedFile || !periodId || importMutation.isPending}
           style={{
             padding: '8px 18px',
             borderRadius: 8,

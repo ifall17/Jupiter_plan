@@ -1,6 +1,10 @@
 import { useState } from 'react';
+import { useForm } from 'react-hook-form';
+import { zodResolver } from '@hookform/resolvers/zod';
+import { z } from 'zod';
 import { apiClient } from '../../api/client';
 import { usePeriodStore } from '../../stores/period.store';
+import { emitAppError, emitAppNotification } from '../../utils/notifications';
 
 const REPORTS = [
   {
@@ -47,9 +51,23 @@ const REPORTS = [
   },
 ];
 
+const reportRequestSchema = z.object({
+  report_type: z.enum(['pl', 'balance_sheet', 'cash_flow', 'budget_variance', 'transactions', 'kpis']),
+  format: z.enum(['pdf', 'excel']),
+});
+
+type ReportRequestValues = z.infer<typeof reportRequestSchema>;
+
 export default function ReportsPage() {
   const { mode, currentPeriodId, quarterNumber, customFrom, customTo } = usePeriodStore();
   const [generating, setGenerating] = useState<string | null>(null);
+  const { handleSubmit, setValue } = useForm<ReportRequestValues>({
+    resolver: zodResolver(reportRequestSchema),
+    defaultValues: {
+      report_type: 'pl',
+      format: 'pdf',
+    },
+  });
 
   function getPeriodParams() {
     switch (mode) {
@@ -64,12 +82,12 @@ export default function ReportsPage() {
     }
   }
 
-  async function handleGenerate(type: string, format: 'pdf' | 'excel') {
-    setGenerating(`${type}-${format}`);
+  const submitGenerate = handleSubmit(async (values) => {
+    setGenerating(`${values.report_type}-${values.format}`);
     try {
       const res = await apiClient.post(
         '/reports/generate',
-        { report_type: type, format, ...getPeriodParams() },
+        { report_type: values.report_type, format: values.format, ...getPeriodParams() },
         { responseType: 'blob' },
       );
 
@@ -78,18 +96,24 @@ export default function ReportsPage() {
       link.href = url;
       link.setAttribute(
         'download',
-        `${type}_${new Date().toISOString().slice(0, 10)}.${format === 'pdf' ? 'pdf' : 'xlsx'}`,
+        `${values.report_type}_${new Date().toISOString().slice(0, 10)}.${values.format === 'pdf' ? 'pdf' : 'xlsx'}`,
       );
       document.body.appendChild(link);
       link.click();
       link.remove();
       window.URL.revokeObjectURL(url);
+      emitAppNotification({ message: 'Rapport généré avec succès', severity: 'INFO' });
     } catch (err) {
-      console.error('Erreur génération rapport:', err);
-      alert('Erreur lors de la génération du rapport');
+      emitAppError('Erreur lors de la génération du rapport');
     } finally {
       setGenerating(null);
     }
+  });
+
+  function handleGenerate(type: string, format: 'pdf' | 'excel') {
+    setValue('report_type', type as ReportRequestValues['report_type']);
+    setValue('format', format);
+    void submitGenerate();
   }
 
   return (
@@ -160,7 +184,7 @@ export default function ReportsPage() {
             <div style={{ display: 'flex', gap: 10, marginTop: 16 }}>
               <button
                 type="button"
-                onClick={() => void handleGenerate(report.id, 'pdf')}
+                onClick={() => handleGenerate(report.id, 'pdf')}
                 disabled={!!generating}
                 style={{
                   flex: 1,
@@ -183,7 +207,7 @@ export default function ReportsPage() {
 
               <button
                 type="button"
-                onClick={() => void handleGenerate(report.id, 'excel')}
+                onClick={() => handleGenerate(report.id, 'excel')}
                 disabled={!!generating}
                 style={{
                   flex: 1,

@@ -32,10 +32,11 @@ let CashFlowService = class CashFlowService {
         const now = new Date();
         now.setHours(0, 0, 0, 0);
         const weekMs = 7 * 24 * 60 * 60 * 1000;
-        const weekly = Array.from({ length: 13 }, (_, i) => ({
+        const zero = new client_1.Prisma.Decimal('0');
+        const weeklyDecimal = Array.from({ length: 13 }, (_, i) => ({
             week: i + 1,
-            inflows: '0',
-            outflows: '0',
+            inflows: zero,
+            outflows: zero,
         }));
         plans.forEach((plan) => {
             const weekIndex = (() => {
@@ -57,27 +58,34 @@ let CashFlowService = class CashFlowService {
             if (weekIndex < 0 || weekIndex > 12) {
                 return;
             }
-            const strictAmount = Number.parseFloat(plan.amount.toString());
-            const strictInflows = plan.direction === client_1.CashFlowDirection.IN ? strictAmount : 0;
-            const strictOutflows = plan.direction === client_1.CashFlowDirection.OUT ? strictAmount : 0;
-            const legacyInflows = Number.parseFloat(plan.inflow.toString());
-            const legacyOutflows = Number.parseFloat(plan.outflow.toString());
-            const normalizedInflows = strictAmount > 0 ? strictInflows : legacyInflows;
-            const normalizedOutflows = strictAmount > 0 ? strictOutflows : legacyOutflows;
-            const inflows = Number.parseFloat(weekly[weekIndex].inflows) + normalizedInflows;
-            const outflows = Number.parseFloat(weekly[weekIndex].outflows) + normalizedOutflows;
-            weekly[weekIndex].inflows = String(inflows);
-            weekly[weekIndex].outflows = String(outflows);
+            const strictAmount = plan.amount;
+            const strictInflows = plan.direction === client_1.CashFlowDirection.IN ? strictAmount : zero;
+            const strictOutflows = plan.direction === client_1.CashFlowDirection.OUT ? strictAmount : zero;
+            const normalizedInflows = strictAmount.gt(zero) ? strictInflows : plan.inflow;
+            const normalizedOutflows = strictAmount.gt(zero) ? strictOutflows : plan.outflow;
+            weeklyDecimal[weekIndex] = {
+                week: weeklyDecimal[weekIndex].week,
+                inflows: weeklyDecimal[weekIndex].inflows.plus(normalizedInflows),
+                outflows: weeklyDecimal[weekIndex].outflows.plus(normalizedOutflows),
+            };
         });
-        const totalInflows = weekly.reduce((sum, item) => sum + Number.parseFloat(item.inflows), 0);
-        const totalOutflows = weekly.reduce((sum, item) => sum + Number.parseFloat(item.outflows), 0);
-        const runway = totalOutflows > 0
-            ? Math.floor(totalInflows / (totalOutflows / 13))
+        const totalInflows = weeklyDecimal.reduce((sum, item) => sum.plus(item.inflows), zero);
+        const totalOutflows = weeklyDecimal.reduce((sum, item) => sum.plus(item.outflows), zero);
+        const avgOutflow = totalOutflows.gt(zero)
+            ? totalOutflows.div(new client_1.Prisma.Decimal('13'))
+            : zero;
+        const runway = avgOutflow.gt(zero)
+            ? totalInflows.div(avgOutflow).toDecimalPlaces(0, client_1.Prisma.Decimal.ROUND_FLOOR).toNumber()
             : 0;
+        const weekly = weeklyDecimal.map((item) => ({
+            week: item.week,
+            inflows: item.inflows.toString(),
+            outflows: item.outflows.toString(),
+        }));
         return {
             weekly,
-            total_inflows: String(totalInflows),
-            total_outflows: String(totalOutflows),
+            total_inflows: totalInflows.toString(),
+            total_outflows: totalOutflows.toString(),
             runway_weeks: runway,
             entries_count: plans.length,
         };
@@ -252,7 +260,7 @@ let CashFlowService = class CashFlowService {
             return null;
         }
         const runway = cashBalance.div(weeklyBurn);
-        return Number(runway.toDecimalPlaces(2, client_1.Prisma.Decimal.ROUND_HALF_UP));
+        return runway.toDecimalPlaces(2, client_1.Prisma.Decimal.ROUND_HALF_UP).toNumber();
     }
     toResponse(plan) {
         return {

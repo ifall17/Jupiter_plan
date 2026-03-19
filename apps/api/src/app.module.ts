@@ -23,6 +23,7 @@ import { ReportsModule } from './modules/reports/reports.module';
 import { CommentsModule } from './modules/comments/comments.module';
 import { JwtThrottlerGuard } from './common/guards/jwt-throttler.guard';
 import { AppController } from './app.controller';
+import { RealtimeModule } from './common/realtime.module';
 
 function validateEnv(env: Record<string, string | undefined>): Record<string, string | undefined> {
   if (!env.JWT_SECRET) {
@@ -74,6 +75,7 @@ function validateEnv(env: Record<string, string | undefined>): Record<string, st
     ]),
     PrismaModule,
     RedisModule,
+    RealtimeModule,
     BullModule.forRoot({
       connection: {
         url: process.env.REDIS_URL,
