@@ -13,10 +13,11 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.ImportsService = exports.MAX_IMPORT_FILE_SIZE_BYTES = void 0;
 const common_1 = require("@nestjs/common");
 const crypto_1 = require("crypto");
+const exceljs_1 = require("exceljs");
 const client_1 = require("@prisma/client");
 const enums_1 = require("../../shared/enums");
-const XLSX = require("xlsx");
 const audit_service_1 = require("../../common/services/audit.service");
+const events_gateway_1 = require("../../common/services/events.gateway");
 const prisma_service_1 = require("../../prisma/prisma.service");
 exports.MAX_IMPORT_FILE_SIZE_BYTES = 10 * 1024 * 1024;
 const ALLOWED_IMPORT_MIME_TYPES = new Set([
@@ -90,10 +91,63 @@ function parseLineType(raw) {
     }
     return null;
 }
+async function readWorkbookRows(buffer) {
+    const workbook = new exceljs_1.default.Workbook();
+    await workbook.xlsx.load(buffer);
+    const worksheet = workbook.worksheets[0];
+    if (!worksheet) {
+        return [];
+    }
+    const headerRow = worksheet.getRow(1);
+    const headers = headerRow.values
+        .slice(1)
+        .map((value) => String(value ?? '').trim());
+    if (headers.every((header) => header.length === 0)) {
+        return [];
+    }
+    const rows = [];
+    worksheet.eachRow((row, rowNumber) => {
+        if (rowNumber === 1) {
+            return;
+        }
+        const record = {};
+        let hasValue = false;
+        headers.forEach((header, index) => {
+            const cellValue = row.getCell(index + 1).value;
+            const normalizedValue = normalizeWorksheetCellValue(cellValue);
+            if (header) {
+                record[header] = normalizedValue;
+            }
+            if (String(normalizedValue ?? '').trim() !== '') {
+                hasValue = true;
+            }
+        });
+        if (hasValue) {
+            rows.push(record);
+        }
+    });
+    return rows;
+}
+function normalizeWorksheetCellValue(value) {
+    if (value === null || value === undefined) {
+        return '';
+    }
+    if (value instanceof Date || typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+        return value;
+    }
+    if (typeof value === 'object' && 'text' in value && typeof value.text === 'string') {
+        return value.text;
+    }
+    if (typeof value === 'object' && 'result' in value) {
+        return normalizeWorksheetCellValue(value.result);
+    }
+    return String(value);
+}
 let ImportsService = ImportsService_1 = class ImportsService {
-    constructor(prisma, auditService) {
+    constructor(prisma, auditService, eventsGateway) {
         this.prisma = prisma;
         this.auditService = auditService;
+        this.eventsGateway = eventsGateway;
         this.logger = new common_1.Logger(ImportsService_1.name);
     }
     async processImport(file, periodId, orgId, createdBy, ipAddress) {
@@ -155,38 +209,14 @@ let ImportsService = ImportsService_1 = class ImportsService {
                 where: { id: job.id },
                 data: { status: client_1.ImportStatus.PROCESSING },
             });
-            const workbook = XLSX.read(file.buffer, { type: 'buffer' });
-            const sheetName = workbook.SheetNames[0];
-            const sheet = sheetName ? workbook.Sheets[sheetName] : undefined;
-            if (!sheet) {
-                throw importBadRequest('IMPORT_WORKBOOK_EMPTY', 'Workbook is empty');
-            }
-            const rows = XLSX.utils.sheet_to_json(sheet, { defval: '', raw: false });
+            this.eventsGateway.emitToOrg(orgId, 'IMPORT_PROGRESS', {
+                job_id: job.id,
+                progress: 10,
+                status: client_1.ImportStatus.PROCESSING,
+            });
+            const rows = await readWorkbookRows(file.buffer);
             if (!rows.length) {
-                await this.prisma.importJob.update({
-                    where: { id: job.id },
-                    data: {
-                        status: client_1.ImportStatus.FAILED,
-                        error_report: { code: 'IMPORT_WORKBOOK_EMPTY', message: 'Fichier vide ou format invalide' },
-                        completed_at: new Date(),
-                    },
-                });
-                await this.safeCreateAuditLog({
-                    org_id: orgId,
-                    user_id: createdBy,
-                    action: enums_1.AuditAction.IMPORT_DONE,
-                    entity_type: 'import_job',
-                    entity_id: job.id,
-                    ip_address: ipAddress,
-                    metadata: { status: client_1.ImportStatus.FAILED, reason: 'IMPORT_WORKBOOK_EMPTY' },
-                });
-                return {
-                    job_id: job.id,
-                    status: client_1.ImportStatus.FAILED,
-                    rows_inserted: 0,
-                    rows_skipped: 0,
-                    error_report: { code: 'IMPORT_WORKBOOK_EMPTY', message: 'Fichier vide ou format invalide' },
-                };
+                throw importBadRequest('IMPORT_WORKBOOK_EMPTY', 'Workbook is empty');
             }
             const transactions = [];
             let rowsSkipped = 0;
@@ -279,6 +309,12 @@ let ImportsService = ImportsService_1 = class ImportsService {
                     has_errors: errors.length > 0,
                 },
             });
+            this.eventsGateway.emitToOrg(orgId, 'IMPORT_DONE', {
+                job_id: completedJob.id,
+                inserted: completedJob.rows_inserted ?? 0,
+                skipped: completedJob.rows_skipped ?? 0,
+                status: completedJob.status,
+            });
             return {
                 job_id: completedJob.id,
                 status: completedJob.status,
@@ -310,6 +346,12 @@ let ImportsService = ImportsService_1 = class ImportsService {
                     status: client_1.ImportStatus.FAILED,
                     error_code: error instanceof common_1.BadRequestException ? 'IMPORT_PROCESSING_FAILED' : 'IMPORT_PROCESSING_FAILED',
                 },
+            });
+            this.eventsGateway.emitToOrg(orgId, 'IMPORT_DONE', {
+                job_id: job.id,
+                inserted: 0,
+                skipped: 0,
+                status: client_1.ImportStatus.FAILED,
             });
             this.logger.error(`Import job ${job.id} failed`, error instanceof Error ? error.stack : undefined);
             throw error;
@@ -355,6 +397,7 @@ exports.ImportsService = ImportsService;
 exports.ImportsService = ImportsService = ImportsService_1 = __decorate([
     (0, common_1.Injectable)(),
     __metadata("design:paramtypes", [prisma_service_1.PrismaService,
-        audit_service_1.AuditService])
+        audit_service_1.AuditService,
+        events_gateway_1.EventsGateway])
 ], ImportsService);
 //# sourceMappingURL=imports.service.js.map

@@ -26,6 +26,7 @@ describe('DashboardService', () => {
             get: jest.fn(),
             set: jest.fn(),
             del: jest.fn(),
+            delByPattern: jest.fn(),
         };
         kpisRepository = {
             findValuesByPeriod: jest.fn(),
@@ -126,8 +127,10 @@ describe('DashboardService', () => {
     });
     it('should invalidate cache after transaction validation', async () => {
         redis.del.mockResolvedValue(1);
+        redis.delByPattern.mockResolvedValue(1);
         await service.invalidateCacheAfterTransactionValidation('org-1', 'period-1');
         expect(redis.del).toHaveBeenCalledWith('dashboard:org-1:period-1');
+        expect(redis.delByPattern).toHaveBeenCalledWith('dashboard:org-1:AGG:*');
     });
     it('should aggregate all dashboard data in single response', async () => {
         redis.get.mockResolvedValue(null);

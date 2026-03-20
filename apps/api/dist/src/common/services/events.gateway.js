@@ -16,20 +16,64 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.EventsGateway = void 0;
 const websockets_1 = require("@nestjs/websockets");
 const common_1 = require("@nestjs/common");
+const config_1 = require("@nestjs/config");
+const jwt_1 = require("@nestjs/jwt");
 const socket_io_1 = require("socket.io");
 let EventsGateway = EventsGateway_1 = class EventsGateway {
-    constructor() {
+    constructor(jwtService, configService) {
+        this.jwtService = jwtService;
+        this.configService = configService;
         this.logger = new common_1.Logger(EventsGateway_1.name);
     }
     handleConnection(client) {
-        this.logger.log({ event_type: 'socket.connected', socket_id: client.id });
+        try {
+            const authenticatedClient = client;
+            const token = this.extractBearerToken(client);
+            if (!token) {
+                throw new common_1.UnauthorizedException('Missing socket bearer token');
+            }
+            const payload = this.jwtService.verify(token, {
+                secret: this.configService.get('JWT_SECRET'),
+                algorithms: ['HS256'],
+            });
+            if (!payload?.sub || !payload.org_id) {
+                throw new common_1.UnauthorizedException('Invalid socket token payload');
+            }
+            authenticatedClient.data.user = payload;
+            client.join(this.orgRoom(payload.org_id));
+            this.logger.log({
+                event_type: 'socket.connected',
+                socket_id: client.id,
+                user_id: payload.sub,
+                org_id: payload.org_id,
+            });
+        }
+        catch (error) {
+            this.logger.warn({
+                event_type: 'socket.connection_rejected',
+                socket_id: client.id,
+                reason: error instanceof Error ? error.message : 'unknown',
+            });
+            client.disconnect(true);
+        }
     }
     handleDisconnect(client) {
         this.logger.log({ event_type: 'socket.disconnected', socket_id: client.id });
     }
     handleJoinOrg(client, payload) {
+        const authenticatedClient = client;
+        const authenticatedOrgId = authenticatedClient.data.user?.org_id;
         const orgId = (payload.org_id ?? '').trim();
-        if (!orgId) {
+        if (!orgId || !authenticatedOrgId) {
+            return;
+        }
+        if (orgId !== authenticatedOrgId) {
+            this.logger.warn({
+                event_type: 'socket.join_org_rejected',
+                socket_id: client.id,
+                requested_org_id: orgId,
+                authenticated_org_id: authenticatedOrgId,
+            });
             return;
         }
         client.join(this.orgRoom(orgId));
@@ -54,6 +98,24 @@ let EventsGateway = EventsGateway_1 = class EventsGateway {
     orgRoom(orgId) {
         return `org:${orgId}`;
     }
+    extractBearerToken(client) {
+        const authHeader = this.readHandshakeValue(client, 'Authorization') ??
+            this.readHandshakeValue(client, 'authorization');
+        if (typeof authHeader !== 'string') {
+            return null;
+        }
+        const normalized = authHeader.trim();
+        if (!normalized.toLowerCase().startsWith('bearer ')) {
+            return null;
+        }
+        const token = normalized.slice(7).trim();
+        return token || null;
+    }
+    readHandshakeValue(client, key) {
+        const auth = client.handshake.auth;
+        const headers = client.handshake.headers;
+        return auth?.[key] ?? headers?.[key];
+    }
 };
 exports.EventsGateway = EventsGateway;
 __decorate([
@@ -74,6 +136,8 @@ exports.EventsGateway = EventsGateway = EventsGateway_1 = __decorate([
             origin: true,
             credentials: true,
         },
-    })
+    }),
+    __metadata("design:paramtypes", [jwt_1.JwtService,
+        config_1.ConfigService])
 ], EventsGateway);
 //# sourceMappingURL=events.gateway.js.map

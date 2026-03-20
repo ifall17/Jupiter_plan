@@ -45,14 +45,21 @@ export class KpisRepository {
   }
 
   async findRevenueTrend3(orgId: string, fiscalYearId: string): Promise<Array<{ period_label: string; value: string }>> {
+    // distinct: ['period_id'] + orderBy double garantit 1 snapshot par période
+    // (PostgreSQL ne traite pas NULL = NULL dans les contraintes UNIQUE,
+    //  donc plusieurs snapshots avec scenario_id=NULL peuvent exister pour la même période)
     const snapshots = await this.prisma.financialSnapshot.findMany({
       where: {
         org_id: orgId,
         scenario_id: null,
         period: { fiscal_year_id: fiscalYearId },
       },
-      include: { period: true },
-      orderBy: { period: { period_number: 'desc' } },
+      include: { period: { select: { label: true, period_number: true } } },
+      orderBy: [
+        { period: { period_number: 'desc' } },
+        { calculated_at: 'desc' },
+      ],
+      distinct: ['period_id'],
       take: 3,
     });
 
@@ -649,7 +656,10 @@ export class DashboardService {
   }
 
   async invalidatePeriodCache(orgId: string, periodId: string): Promise<void> {
-    await this.redisService.del(this.buildCacheKey(orgId, periodId));
+    await Promise.all([
+      this.redisService.del(this.buildCacheKey(orgId, periodId)),
+      this.redisService.delByPattern(`dashboard:${orgId}:AGG:*`),
+    ]);
   }
 
   private async resolvePeriod(orgId: string, periodId?: string): Promise<{

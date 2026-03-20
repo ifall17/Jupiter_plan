@@ -124,10 +124,12 @@ export default function BudgetPage() {
     },
   });
 
-  const totalBudget = budgets.reduce(
-    (sum, b) => sum + b.lines.reduce((ls, l) => ls + (Number(l.amount_budget) || 0), 0),
-    0,
-  );
+  // A reforecast budget replaces its parent for total calculation purposes.
+  // Only count budgets that have NOT been superseded by a newer reforecast.
+  const supersededIds = new Set(budgets.filter((b) => b.parent_budget_id).map((b) => b.parent_budget_id));
+  const totalBudget = budgets
+    .filter((b) => !supersededIds.has(b.id))
+    .reduce((sum, b) => sum + b.lines.reduce((ls, l) => ls + (Number(l.amount_budget) || 0), 0), 0);
 
   const handleCreate = handleSubmit(async (values) => {
     setIsCreating(true);

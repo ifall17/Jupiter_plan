@@ -36,6 +36,16 @@ export class RedisService {
     return this.withConnection(() => this.client.del(key));
   }
 
+  async delByPattern(pattern: string): Promise<number> {
+    return this.withConnection(async () => {
+      const keys = await this.client.keys(pattern);
+      if (keys.length === 0) {
+        return 0;
+      }
+      return this.client.del(...keys);
+    });
+  }
+
   async incr(key: string): Promise<number> {
     return this.withConnection(() => this.client.incr(key));
   }

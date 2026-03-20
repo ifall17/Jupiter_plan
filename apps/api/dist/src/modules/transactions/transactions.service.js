@@ -147,11 +147,67 @@ let TransactionsService = class TransactionsService {
         return this.toResponse(transaction);
     }
     async validateBatch(currentUser, ids) {
-        const result = await this.prisma.transaction.updateMany({
-            where: { id: { in: ids }, org_id: currentUser.org_id },
-            data: { is_validated: true, validated_by: currentUser.sub },
+        const result = await this.prisma.$transaction(async (trx) => {
+            const updateResult = await trx.transaction.updateMany({
+                where: { id: { in: ids }, org_id: currentUser.org_id },
+                data: { is_validated: true, validated_by: currentUser.sub },
+            });
+            if (updateResult.count > 0) {
+                await this.syncBudgetLines(currentUser.org_id, trx);
+            }
+            return { updated: updateResult.count };
         });
-        return { updated: result.count };
+        return result;
+    }
+    async syncBudgetLines(orgId, trx = this.prisma) {
+        const periods = await trx.period.findMany({
+            where: { organization: { id: orgId } },
+            select: { id: true },
+        });
+        if (periods.length === 0)
+            return;
+        for (const period of periods) {
+            const transactions = await trx.transaction.findMany({
+                where: {
+                    org_id: orgId,
+                    period_id: period.id,
+                    is_validated: true,
+                },
+                select: {
+                    account_code: true,
+                    account_label: true,
+                    department: true,
+                    amount: true,
+                },
+            });
+            const grouped = new Map();
+            for (const tx of transactions) {
+                const key = `${tx.account_code}|${tx.account_label}|${tx.department}`;
+                const existing = grouped.get(key) ?? new client_1.Prisma.Decimal('0');
+                grouped.set(key, existing.plus(tx.amount));
+            }
+            for (const [key, totalAmount] of grouped.entries()) {
+                const [accountCode, accountLabel, department] = key.split('|');
+                const budgetLines = await trx.budgetLine.findMany({
+                    where: {
+                        org_id: orgId,
+                        period_id: period.id,
+                        account_code: accountCode,
+                        account_label: accountLabel,
+                        department: department,
+                    },
+                    select: { id: true },
+                });
+                for (const budgetLine of budgetLines) {
+                    await trx.budgetLine.update({
+                        where: { id: budgetLine.id },
+                        data: {
+                            amount_actual: totalAmount.abs(),
+                        },
+                    });
+                }
+            }
+        }
     }
     async ensurePeriodBelongsToOrg(periodId, orgId) {
         const period = await this.prisma.period.findFirst({

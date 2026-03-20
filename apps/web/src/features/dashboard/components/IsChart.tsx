@@ -6,11 +6,10 @@ interface IsChartProps {
 }
 
 export default function IsChart({ data }: IsChartProps) {
-  // Trouve le max pour normaliser
-  const maxValue = Math.max(
-    ...data.map((d) => Number(d.value) || 0),
-    1
-  );
+  const values = data.map((d) => Number(d.value) || 0);
+  const totalSum = values.reduce((s, v) => s + v, 0);
+  const maxValue = Math.max(...values, 1);
+  const hasData = data.length > 0 && totalSum > 0;
 
   return (
     <div
@@ -32,52 +31,64 @@ export default function IsChart({ data }: IsChartProps) {
       >
         Chiffre d'affaires — Tendance
       </h3>
-      <div
-        style={{
-          display: 'flex',
-          gap: '8px',
-          alignItems: 'flex-end',
-          height: '140px',
-        }}
-      >
-        {data.map((item, idx) => (
-          <div
-            key={idx}
-            style={{
-              flex: 1,
-              display: 'flex',
-              flexDirection: 'column',
-              alignItems: 'center',
-              gap: '8px',
-            }}
-          >
+      {!hasData ? (
+        <div
+          style={{
+            height: '140px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            color: 'var(--text-lo)',
+            fontSize: '13px',
+          }}
+        >
+          Aucune donnée disponible
+        </div>
+      ) : (
+        <div
+          style={{
+            display: 'flex',
+            gap: '8px',
+            alignItems: 'flex-end',
+            height: '140px',
+          }}
+        >
+          {data.map((item, idx) => (
             <div
+              key={idx}
               style={{
-                width: '100%',
-                height: `${Math.max(
-                  (Number(item.value) / maxValue) * 100,
-                  5
-                )}%`,
-                background: 'var(--terra)',
-                borderRadius: '4px',
-              }}
-            />
-            <span
-              style={{
-                fontSize: '10px',
-                color: 'var(--text-lo)',
-                textAlign: 'center',
-                maxWidth: '100%',
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
+                flex: 1,
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                gap: '8px',
               }}
             >
-              {item.period_label}
-            </span>
-          </div>
-        ))}
-      </div>
+              <div
+                style={{
+                  width: '100%',
+                  height: `${Math.max((Number(item.value) / maxValue) * 100, 5)}%`,
+                  background: 'var(--terra)',
+                  borderRadius: '4px',
+                }}
+              />
+              <span
+                style={{
+                  fontSize: '10px',
+                  color: 'var(--text-lo)',
+                  textAlign: 'center',
+                  maxWidth: '100%',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {item.period_label}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

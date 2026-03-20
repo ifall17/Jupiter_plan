@@ -63,8 +63,9 @@ let BudgetsService = BudgetsService_1 = class BudgetsService {
         return this.toBudgetResponse(this.filterByRoleAndDepartment(budget, currentUser));
     }
     async createBudget(currentUser, dto, ipAddress) {
+        let parent = null;
         if (dto.parent_budget_id) {
-            const parent = await this.budgetsRepository.findByIdInOrg(dto.parent_budget_id, currentUser.org_id);
+            parent = await this.budgetsRepository.findByIdInOrg(dto.parent_budget_id, currentUser.org_id);
             if (!parent || parent.fiscal_year_id !== dto.fiscal_year_id || parent.status !== client_1.BudgetStatus.LOCKED) {
                 throw new common_1.BadRequestException({ code: BUDGET_ERROR_CODES.BUDGET_NOT_LOCKED });
             }
@@ -78,6 +79,17 @@ let BudgetsService = BudgetsService_1 = class BudgetsService {
             version,
             status: client_1.BudgetStatus.DRAFT,
         });
+        if (parent && parent.budget_lines.length > 0) {
+            const linesToCopy = parent.budget_lines.map((line) => ({
+                period_id: line.period_id,
+                account_code: line.account_code,
+                account_label: line.account_label,
+                department: line.department,
+                line_type: line.line_type,
+                amount_budget: line.amount_budget.toString(),
+            }));
+            await this.budgetsRepository.upsertBudgetLines(budget.id, currentUser.org_id, currentUser.sub, linesToCopy);
+        }
         await this.auditService.createLog({
             org_id: currentUser.org_id,
             user_id: currentUser.sub,
@@ -88,9 +100,12 @@ let BudgetsService = BudgetsService_1 = class BudgetsService {
             metadata: {
                 from_status: null,
                 to_status: client_1.BudgetStatus.DRAFT,
+                parent_budget_id: dto.parent_budget_id ?? null,
+                lines_copied: parent?.budget_lines.length ?? 0,
             },
         });
-        return this.toBudgetResponse(budget);
+        const refreshed = await this.budgetsRepository.findByIdInOrg(budget.id, currentUser.org_id);
+        return this.toBudgetResponse(refreshed);
     }
     async updateLines(currentUser, budgetId, dto) {
         const budget = await this.ensureOwnedBudget(budgetId, currentUser.org_id);

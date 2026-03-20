@@ -50,8 +50,12 @@ let KpisRepository = class KpisRepository {
                 scenario_id: null,
                 period: { fiscal_year_id: fiscalYearId },
             },
-            include: { period: true },
-            orderBy: { period: { period_number: 'desc' } },
+            include: { period: { select: { label: true, period_number: true } } },
+            orderBy: [
+                { period: { period_number: 'desc' } },
+                { calculated_at: 'desc' },
+            ],
+            distinct: ['period_id'],
             take: 3,
         });
         return snapshots
@@ -570,7 +574,10 @@ let DashboardService = DashboardService_1 = class DashboardService {
         await this.invalidatePeriodCache(orgId, periodId);
     }
     async invalidatePeriodCache(orgId, periodId) {
-        await this.redisService.del(this.buildCacheKey(orgId, periodId));
+        await Promise.all([
+            this.redisService.del(this.buildCacheKey(orgId, periodId)),
+            this.redisService.delByPattern(`dashboard:${orgId}:AGG:*`),
+        ]);
     }
     async resolvePeriod(orgId, periodId) {
         const period = periodId

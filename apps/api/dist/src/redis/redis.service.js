@@ -40,6 +40,15 @@ let RedisService = class RedisService {
     async del(key) {
         return this.withConnection(() => this.client.del(key));
     }
+    async delByPattern(pattern) {
+        return this.withConnection(async () => {
+            const keys = await this.client.keys(pattern);
+            if (keys.length === 0) {
+                return 0;
+            }
+            return this.client.del(...keys);
+        });
+    }
     async incr(key) {
         return this.withConnection(() => this.client.incr(key));
     }

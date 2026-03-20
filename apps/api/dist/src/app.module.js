@@ -32,6 +32,7 @@ const reports_module_1 = require("./modules/reports/reports.module");
 const comments_module_1 = require("./modules/comments/comments.module");
 const jwt_throttler_guard_1 = require("./common/guards/jwt-throttler.guard");
 const app_controller_1 = require("./app.controller");
+const realtime_module_1 = require("./common/realtime.module");
 function validateEnv(env) {
     if (!env.JWT_SECRET) {
         throw new Error('JWT_SECRET is required');
@@ -78,6 +79,7 @@ exports.AppModule = AppModule = __decorate([
             ]),
             prisma_module_1.PrismaModule,
             redis_module_1.RedisModule,
+            realtime_module_1.RealtimeModule,
             bullmq_1.BullModule.forRoot({
                 connection: {
                     url: process.env.REDIS_URL,

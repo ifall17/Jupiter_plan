@@ -112,7 +112,7 @@ function parseLineType(raw: string): LineType | null {
 
 async function readWorkbookRows(buffer: Buffer): Promise<Array<Record<string, unknown>>> {
   const workbook = new ExcelJS.Workbook();
-  await workbook.xlsx.load(buffer);
+  await workbook.xlsx.load(buffer as any);
 
   const worksheet = workbook.worksheets[0];
   if (!worksheet) {
@@ -120,17 +120,17 @@ async function readWorkbookRows(buffer: Buffer): Promise<Array<Record<string, un
   }
 
   const headerRow = worksheet.getRow(1);
-  const headers = headerRow.values
+  const headers = (headerRow.values as any[])
     .slice(1)
-    .map((value) => String(value ?? '').trim());
+    .map((value: any) => String(value ?? '').trim());
 
-  if (headers.every((header) => header.length === 0)) {
+  if (headers.every((header: any) => header.length === 0)) {
     return [];
   }
 
   const rows: Array<Record<string, unknown>> = [];
 
-  worksheet.eachRow((row, rowNumber) => {
+  worksheet.eachRow((row: any, rowNumber: any) => {
     if (rowNumber === 1) {
       return;
     }
@@ -138,7 +138,7 @@ async function readWorkbookRows(buffer: Buffer): Promise<Array<Record<string, un
     const record: Record<string, unknown> = {};
     let hasValue = false;
 
-    headers.forEach((header, index) => {
+    headers.forEach((header: any, index: any) => {
       const cellValue = row.getCell(index + 1).value;
       const normalizedValue = normalizeWorksheetCellValue(cellValue);
       if (header) {
