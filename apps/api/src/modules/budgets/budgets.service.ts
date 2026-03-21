@@ -388,6 +388,31 @@ export class BudgetsService {
     return this.toBudgetResponse(refreshed);
   }
 
+  async deleteLine(
+    currentUser: BudgetCurrentUser,
+    budgetId: string,
+    lineId: string,
+  ): Promise<BudgetResponseDto> {
+    const budget = await this.ensureOwnedBudget(budgetId, currentUser.org_id);
+
+    if (budget.status !== BudgetStatus.DRAFT && budget.status !== BudgetStatus.REJECTED) {
+      throw new BadRequestException({ code: BUDGET_ERROR_CODES.BUDGET_LOCKED });
+    }
+
+    if (currentUser.role === UserRole.CONTRIBUTEUR) {
+      const line = budget.budget_lines.find((l) => l.id === lineId);
+      const allowedDepartments = await this.budgetsRepository.getContributorDepartments(currentUser.sub);
+      if (!line || !allowedDepartments.includes(line.department)) {
+        throw new NotFoundException();
+      }
+    }
+
+    await this.budgetsRepository.deleteLineById(budgetId, currentUser.org_id, lineId);
+
+    const refreshed = await this.ensureOwnedBudget(budgetId, currentUser.org_id);
+    return this.toBudgetResponse(this.filterByRoleAndDepartment(refreshed, currentUser));
+  }
+
   async deleteBudget(
     currentUser: BudgetCurrentUser,
     budgetId: string,
@@ -502,6 +527,7 @@ export class BudgetsService {
         return {
           id: line.id,
           period_id: line.period_id,
+          period_label: line.period?.label ?? '',
           account_code: line.account_code,
           account_label: line.account_label,
           department: line.department,

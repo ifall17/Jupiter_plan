@@ -251,6 +251,76 @@ export class UsersRepository extends BaseRepository<RepoUser> {
     });
   }
 
+  async replaceDepartmentScopes(userId: string, department?: string): Promise<void> {
+    await this.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+      await tx.userDepartmentScope.deleteMany({
+        where: { user_id: userId },
+      });
+
+      if (department?.trim()) {
+        await tx.userDepartmentScope.create({
+          data: {
+            user_id: userId,
+            department: department.trim(),
+            can_read: true,
+            can_write: true,
+          },
+        });
+      }
+    });
+  }
+
+  async getDeletionBlockers(userId: string, orgId: string): Promise<string[]> {
+    const [
+      auditAccessCount,
+      closedPeriodsCount,
+      budgetSubmittedCount,
+      budgetApprovedCount,
+      budgetLockedCount,
+      budgetLinesCount,
+      validatedTransactionsCount,
+      importJobsCount,
+      scenariosCount,
+      commentsCount,
+    ] = await this.prisma.$transaction([
+      this.prisma.auditAccess.count({ where: { org_id: orgId, created_by: userId } }),
+      this.prisma.period.count({ where: { fiscal_year: { org_id: orgId }, closed_by: userId } }),
+      this.prisma.budget.count({ where: { org_id: orgId, submitted_by: userId } }),
+      this.prisma.budget.count({ where: { org_id: orgId, approved_by: userId } }),
+      this.prisma.budget.count({ where: { org_id: orgId, locked_by: userId } }),
+      this.prisma.budgetLine.count({ where: { org_id: orgId, created_by: userId } }),
+      this.prisma.transaction.count({ where: { org_id: orgId, validated_by: userId } }),
+      this.prisma.importJob.count({ where: { org_id: orgId, created_by: userId } }),
+      this.prisma.scenario.count({ where: { org_id: orgId, created_by: userId } }),
+      this.prisma.comment.count({ where: { org_id: orgId, user_id: userId } }),
+    ]);
+
+    const blockers: string[] = [];
+    if (auditAccessCount > 0) blockers.push('audit_access');
+    if (closedPeriodsCount > 0) blockers.push('closed_periods');
+    if (budgetSubmittedCount > 0) blockers.push('budget_submitted');
+    if (budgetApprovedCount > 0) blockers.push('budget_approved');
+    if (budgetLockedCount > 0) blockers.push('budget_locked');
+    if (budgetLinesCount > 0) blockers.push('budget_lines_created');
+    if (validatedTransactionsCount > 0) blockers.push('transactions_validated');
+    if (importJobsCount > 0) blockers.push('import_jobs_created');
+    if (scenariosCount > 0) blockers.push('scenarios_created');
+    if (commentsCount > 0) blockers.push('comments');
+
+    return blockers;
+  }
+
+  async deleteUserByIdInOrg(userId: string, orgId: string): Promise<void> {
+    await this.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+      await tx.userDepartmentScope.deleteMany({ where: { user_id: userId } });
+      await tx.auditLog.updateMany({
+        where: { org_id: orgId, user_id: userId },
+        data: { user_id: null },
+      });
+      await tx.user.deleteMany({ where: { id: userId, org_id: orgId } });
+    });
+  }
+
   async updatePassword(userId: string, orgId: string, passwordHash: string): Promise<void> {
     await this.prisma.user.updateMany({
       where: { id: userId, org_id: orgId },

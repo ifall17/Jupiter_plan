@@ -38,7 +38,9 @@ type CurrentOrgResponse = {
   name: string;
   currency: string;
   current_period_id: string | null;
+  current_period_label: string | null;
   fiscal_year_id: string | null;
+  fiscal_year_label: string | null;
 };
 
 function mapAuthError(error: unknown): string {
@@ -83,7 +85,9 @@ export function useLogin() {
           orgName: org.name,
           currency: org.currency,
           currentPeriod: org.current_period_id,
+          currentPeriodLabel: org.current_period_label,
           fiscalYearId: org.fiscal_year_id,
+          fiscalYearLabel: org.fiscal_year_label,
         });
       } catch {
         // Keep login usable even if the organization endpoint is not available yet.

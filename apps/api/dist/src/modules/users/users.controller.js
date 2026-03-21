@@ -56,6 +56,9 @@ let UsersController = class UsersController {
     async toggle(req, id) {
         return this.usersService.toggleUser(this.getCurrentUser(req), id, this.extractIp(req));
     }
+    async delete(req, id) {
+        return this.usersService.deleteUser(this.getCurrentUser(req), id, this.extractIp(req));
+    }
     getCurrentUser(req) {
         const user = req.user;
         if (!user?.sub || !user.org_id) {
@@ -166,6 +169,17 @@ __decorate([
     __metadata("design:paramtypes", [Object, String]),
     __metadata("design:returntype", Promise)
 ], UsersController.prototype, "toggle", null);
+__decorate([
+    (0, common_1.Delete)(':id'),
+    (0, common_1.HttpCode)(200),
+    (0, roles_decorator_1.Roles)(enums_1.UserRole.SUPER_ADMIN),
+    (0, common_1.UseGuards)(jwt_auth_guard_1.JwtAuthGuard, roles_guard_1.RolesGuard, org_guard_1.OrgGuard),
+    __param(0, (0, common_1.Req)()),
+    __param(1, (0, common_1.Param)('id')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Object, String]),
+    __metadata("design:returntype", Promise)
+], UsersController.prototype, "delete", null);
 exports.UsersController = UsersController = __decorate([
     (0, common_1.Controller)('users'),
     __metadata("design:paramtypes", [users_service_1.UsersService])

@@ -10,6 +10,7 @@ import { formatFCFA } from '../../utils/currency';
 type BudgetLine = {
   id: string;
   period_id: string;
+  period_label?: string;
   account_code: string;
   account_label: string;
   department: string;
@@ -196,6 +197,7 @@ export default function BudgetDetailPage() {
   const { id } = useParams();
   const queryClient = useQueryClient();
   const [showLineModal, setShowLineModal] = useState(false);
+  const [editingLine, setEditingLine] = useState<BudgetLine | null>(null);
   const [isAddingLine, setIsAddingLine] = useState(false);
   const [lineError, setLineError] = useState('');
   const [successToast, setSuccessToast] = useState('');
@@ -218,6 +220,14 @@ export default function BudgetDetailPage() {
     },
   });
   const watchedPeriodId = watch('period_id');
+
+  const deleteMutation = useMutation({
+    mutationFn: (lineId: string) => apiClient.delete(`/budgets/${id}/lines/${lineId}`),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['budget', id] });
+      setSuccessToast('Ligne supprimée');
+    },
+  });
 
   const { data, isLoading } = useQuery({
     queryKey: ['budget', id],
@@ -291,6 +301,7 @@ export default function BudgetDetailPage() {
       amount_budget: '',
       period_id: periods[0]?.id ?? '',
     });
+    setEditingLine(null);
     setLineError('');
   };
 
@@ -299,7 +310,9 @@ export default function BudgetDetailPage() {
     setIsAddingLine(true);
     setLineError('');
     try {
-      const existingLinesPayload = (budget.lines ?? []).map((line) => ({
+      const existingLinesPayload = (budget.lines ?? [])
+        .filter((l) => editingLine === null || l.id !== editingLine.id)
+        .map((line) => ({
         id: line.id,
         period_id: line.period_id,
         account_code: line.account_code,
@@ -310,6 +323,7 @@ export default function BudgetDetailPage() {
       }));
 
       const newLinePayload = {
+        ...(editingLine ? { id: editingLine.id } : {}),
         account_code: values.account_code.trim(),
         account_label: values.account_label.trim(),
         department: values.department,
@@ -325,13 +339,32 @@ export default function BudgetDetailPage() {
       await queryClient.invalidateQueries({ queryKey: ['budget', budget.id] });
       setShowLineModal(false);
       resetLineForm();
-      setSuccessToast('Ligne ajoutée avec succès');
+      setSuccessToast(editingLine ? 'Ligne modifiée avec succès' : 'Ligne ajoutée avec succès');
     } catch (err: any) {
-      setLineError(err.response?.data?.message ?? 'Erreur lors de l ajout de la ligne');
+      setLineError(err.response?.data?.message ?? "Erreur lors de l'enregistrement de la ligne");
     } finally {
       setIsAddingLine(false);
     }
   });
+
+  const isEditable = budget.status === 'DRAFT' || budget.status === 'REJECTED';
+
+  const openEditModal = (line: BudgetLine) => {
+    setEditingLine(line);
+    setValue('account_code', line.account_code);
+    setValue('account_label', line.account_label);
+    setValue('department', line.department);
+    setValue('line_type', line.line_type as 'REVENUE' | 'EXPENSE');
+    setValue('amount_budget', String(parseFloat(line.amount_budget)));
+    setValue('period_id', line.period_id);
+    setLineError('');
+    setShowLineModal(true);
+  };
+
+  const handleDeleteLine = (line: BudgetLine) => {
+    if (!window.confirm(`Supprimer la ligne "${line.account_label}" ?`)) return;
+    deleteMutation.mutate(line.id);
+  };
 
   return (
     <div style={{ padding: '28px 32px', maxWidth: 1360, margin: '0 auto' }}>
@@ -375,12 +408,12 @@ export default function BudgetDetailPage() {
 
       <BudgetActions budget={budget} />
 
-      {budget.status === 'DRAFT' && (
+      {isEditable && (
         <button
           onClick={() => {
-            setShowLineModal(true);
+            resetLineForm();
             setValue('period_id', watchedPeriodId || periods[0]?.id || '');
-            setLineError('');
+            setShowLineModal(true);
           }}
           style={{
             padding: '8px 18px',
@@ -410,7 +443,7 @@ export default function BudgetDetailPage() {
         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
           <thead>
             <tr style={{ background: 'var(--surface2)', borderBottom: '1px solid var(--border)' }}>
-              {['Code', 'Libelle', 'Departement', 'Type', 'Montant Budget', 'Montant Reel', 'Variance'].map((h) => (
+              {['Code', 'Libelle', 'Departement', 'Période', 'Type', 'Montant Budget', 'Montant Reel', 'Variance', ...(isEditable ? ['Actions'] : [])].map((h) => (
                 <th
                   key={h}
                   style={{
@@ -451,6 +484,7 @@ export default function BudgetDetailPage() {
                   {line.account_label}
                 </td>
                 <td style={{ padding: '12px 16px', fontSize: 12, color: 'var(--text-md)' }}>{line.department}</td>
+                <td style={{ padding: '12px 16px', fontSize: 12, color: 'var(--text-md)' }}>{line.period_label ?? '—'}</td>
                 <td style={{ padding: '12px 16px' }}>
                   <span
                     style={{
@@ -503,13 +537,48 @@ export default function BudgetDetailPage() {
                 >
                   {calcVariance(line.amount_budget, line.amount_actual)}
                 </td>
+                {isEditable && (
+                  <td style={{ padding: '8px 12px', whiteSpace: 'nowrap' }}>
+                    <button
+                      onClick={() => openEditModal(line)}
+                      title="Modifier"
+                      style={{
+                        padding: '4px 10px',
+                        marginRight: 6,
+                        fontSize: 12,
+                        border: '1px solid var(--border)',
+                        borderRadius: 6,
+                        background: 'var(--surface)',
+                        cursor: 'pointer',
+                        color: 'var(--indigo)',
+                      }}
+                    >
+                      Modifier
+                    </button>
+                    <button
+                      onClick={() => handleDeleteLine(line)}
+                      title="Supprimer"
+                      style={{
+                        padding: '4px 10px',
+                        fontSize: 12,
+                        border: '1px solid var(--terra)',
+                        borderRadius: 6,
+                        background: 'transparent',
+                        cursor: 'pointer',
+                        color: 'var(--terra)',
+                      }}
+                    >
+                      Supprimer
+                    </button>
+                  </td>
+                )}
               </tr>
             ))}
           </tbody>
           <tfoot>
             <tr style={{ borderTop: '2px solid var(--border)', background: 'var(--surface2)' }}>
               <td
-                colSpan={4}
+                colSpan={isEditable ? 6 : 5}
                 style={{
                   padding: '14px 16px',
                   fontSize: 12,
@@ -585,7 +654,7 @@ export default function BudgetDetailPage() {
               X
             </button>
             <h2 style={{ fontFamily: 'var(--font-serif)', fontSize: 22, color: 'var(--ink)', marginBottom: 20 }}>
-              Ajouter une ligne budgétaire
+              {editingLine ? 'Modifier la ligne budgétaire' : 'Ajouter une ligne budgétaire'}
             </h2>
 
             <div style={{ display: 'grid', gap: 12 }}>
@@ -713,6 +782,7 @@ export default function BudgetDetailPage() {
                 }}
               >
                 {isAddingLine ? 'Ajout...' : 'Ajouter la ligne'}
+                              {isAddingLine ? 'Enregistrement...' : editingLine ? 'Enregistrer les modifications' : 'Ajouter la ligne'}
               </button>
             </div>
           </div>

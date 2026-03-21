@@ -29,6 +29,7 @@ const ERROR_CODES = {
     EMAIL_ALREADY_EXISTS: 'USER_002',
     CANNOT_DEACTIVATE_SELF: 'USER_003',
     DEPARTMENT_REQUIRED: 'USER_004',
+    USER_DELETE_BLOCKED: 'USER_005',
     INVALID_CREDENTIALS: 'AUTH_001',
 };
 let UsersService = UsersService_1 = class UsersService {
@@ -129,14 +130,21 @@ let UsersService = UsersService_1 = class UsersService {
                 message: 'Insufficient permissions.',
             });
         }
-        if (dto.role === enums_1.UserRole.CONTRIBUTEUR && (!existing.department_scopes || existing.department_scopes.length === 0)) {
+        const nextRole = dto.role ?? existing.role;
+        const nextDepartment = dto.department?.trim();
+        if (nextRole === enums_1.UserRole.CONTRIBUTEUR &&
+            !nextDepartment &&
+            (!existing.department_scopes || existing.department_scopes.length === 0)) {
             throw new common_1.BadRequestException({
                 code: ERROR_CODES.DEPARTMENT_REQUIRED,
                 message: 'Department scope is required for contributeur role.',
             });
         }
-        if (dto.role && dto.role !== enums_1.UserRole.CONTRIBUTEUR && existing.role === enums_1.UserRole.CONTRIBUTEUR) {
+        if (nextRole !== enums_1.UserRole.CONTRIBUTEUR && existing.role === enums_1.UserRole.CONTRIBUTEUR) {
             await this.usersRepository.clearDepartmentScopes(existing.id);
+        }
+        if (nextRole === enums_1.UserRole.CONTRIBUTEUR && nextDepartment) {
+            await this.usersRepository.replaceDepartmentScopes(existing.id, nextDepartment);
         }
         const updated = await this.usersRepository.updateUserByIdInOrg(userId, currentUser.org_id, {
             first_name: dto.first_name?.trim(),
@@ -197,6 +205,43 @@ let UsersService = UsersService_1 = class UsersService {
             },
         });
         return { success: true, is_active: nextState };
+    }
+    async deleteUser(currentUser, userId, ipAddress) {
+        const user = await this.usersRepository.findByIdInOrg(userId, currentUser.org_id);
+        if (!user) {
+            throw new common_1.NotFoundException({ code: ERROR_CODES.USER_NOT_FOUND, message: 'User not found.' });
+        }
+        if (currentUser.sub === user.id) {
+            throw new common_1.BadRequestException({
+                code: ERROR_CODES.INSUFFICIENT_PERMISSIONS,
+                message: 'Cannot delete your own account.',
+            });
+        }
+        const blockers = await this.usersRepository.getDeletionBlockers(user.id, currentUser.org_id);
+        if (blockers.length > 0) {
+            throw new common_1.BadRequestException({
+                code: ERROR_CODES.USER_DELETE_BLOCKED,
+                message: 'User cannot be deleted because related records exist.',
+                blockers,
+            });
+        }
+        try {
+            await this.redisService.del(`refresh:${user.id}`);
+        }
+        catch {
+            throw new common_1.InternalServerErrorException('Unable to invalidate session.');
+        }
+        await this.usersRepository.createAuditLog({
+            org_id: currentUser.org_id,
+            user_id: currentUser.sub,
+            action: enums_1.AuditAction.USER_UPDATE,
+            entity_type: 'user',
+            entity_id: user.id,
+            ip_address: ipAddress,
+            metadata: { event_type: 'USER_DELETE', outcome: 'SUCCESS', deleted_email: user.email },
+        });
+        await this.usersRepository.deleteUserByIdInOrg(user.id, currentUser.org_id);
+        return { success: true };
     }
     async getMe(currentUser) {
         const user = await this.usersRepository.findByIdInOrg(currentUser.sub, currentUser.org_id);

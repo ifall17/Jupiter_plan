@@ -28,6 +28,7 @@ const ERROR_CODES = {
   EMAIL_ALREADY_EXISTS: 'USER_002',
   CANNOT_DEACTIVATE_SELF: 'USER_003',
   DEPARTMENT_REQUIRED: 'USER_004',
+  USER_DELETE_BLOCKED: 'USER_005',
   INVALID_CREDENTIALS: 'AUTH_001',
 } as const;
 
@@ -182,15 +183,26 @@ export class UsersService {
       });
     }
 
-    if (dto.role === UserRole.CONTRIBUTEUR && (!existing.department_scopes || existing.department_scopes.length === 0)) {
+    const nextRole = dto.role ?? existing.role;
+    const nextDepartment = dto.department?.trim();
+
+    if (
+      nextRole === UserRole.CONTRIBUTEUR &&
+      !nextDepartment &&
+      (!existing.department_scopes || existing.department_scopes.length === 0)
+    ) {
       throw new BadRequestException({
         code: ERROR_CODES.DEPARTMENT_REQUIRED,
         message: 'Department scope is required for contributeur role.',
       });
     }
 
-    if (dto.role && dto.role !== UserRole.CONTRIBUTEUR && existing.role === UserRole.CONTRIBUTEUR) {
+    if (nextRole !== UserRole.CONTRIBUTEUR && existing.role === UserRole.CONTRIBUTEUR) {
       await this.usersRepository.clearDepartmentScopes(existing.id);
+    }
+
+    if (nextRole === UserRole.CONTRIBUTEUR && nextDepartment) {
+      await this.usersRepository.replaceDepartmentScopes(existing.id, nextDepartment);
     }
 
     const updated = await this.usersRepository.updateUserByIdInOrg(userId, currentUser.org_id, {
@@ -265,6 +277,52 @@ export class UsersService {
     });
 
     return { success: true, is_active: nextState };
+  }
+
+  async deleteUser(
+    currentUser: CurrentUserPayload,
+    userId: string,
+    ipAddress?: string,
+  ): Promise<{ success: true }> {
+    const user = await this.usersRepository.findByIdInOrg(userId, currentUser.org_id);
+    if (!user) {
+      throw new NotFoundException({ code: ERROR_CODES.USER_NOT_FOUND, message: 'User not found.' });
+    }
+
+    if (currentUser.sub === user.id) {
+      throw new BadRequestException({
+        code: ERROR_CODES.INSUFFICIENT_PERMISSIONS,
+        message: 'Cannot delete your own account.',
+      });
+    }
+
+    const blockers = await this.usersRepository.getDeletionBlockers(user.id, currentUser.org_id);
+    if (blockers.length > 0) {
+      throw new BadRequestException({
+        code: ERROR_CODES.USER_DELETE_BLOCKED,
+        message: 'User cannot be deleted because related records exist.',
+        blockers,
+      });
+    }
+
+    try {
+      await this.redisService.del(`refresh:${user.id}`);
+    } catch {
+      throw new InternalServerErrorException('Unable to invalidate session.');
+    }
+
+    await this.usersRepository.createAuditLog({
+      org_id: currentUser.org_id,
+      user_id: currentUser.sub,
+      action: AuditAction.USER_UPDATE,
+      entity_type: 'user',
+      entity_id: user.id,
+      ip_address: ipAddress,
+      metadata: { event_type: 'USER_DELETE', outcome: 'SUCCESS', deleted_email: user.email },
+    });
+
+    await this.usersRepository.deleteUserByIdInOrg(user.id, currentUser.org_id);
+    return { success: true };
   }
 
   async getMe(currentUser: CurrentUserPayload): Promise<UserResponseDto> {

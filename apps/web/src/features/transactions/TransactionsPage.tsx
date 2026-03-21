@@ -192,28 +192,42 @@ function AddTransactionModal({
   periods,
   onClose,
   onSuccess,
+  editingTransaction,
 }: {
   periods: Period[];
   onClose: () => void;
   onSuccess: () => void;
+  editingTransaction?: Transaction | null;
 }) {
   const [error, setError] = useState('');
   const {
     register,
     handleSubmit,
     formState: { errors },
+    setValue,
   } = useForm<AddTransactionFormValues>({
     resolver: zodResolver(addTransactionSchema),
-    defaultValues: {
-      transaction_date: new Date().toISOString().slice(0, 10),
-      account_code: '',
-      label: '',
-      department: departments[0],
-      line_type: 'REVENUE',
-      amount: '',
-      period_id: periods[0]?.id ?? '',
-      notes: '',
-    },
+    defaultValues: editingTransaction
+      ? {
+          transaction_date: editingTransaction.transaction_date,
+          account_code: editingTransaction.account_code,
+          label: editingTransaction.label,
+          department: editingTransaction.department,
+          line_type: editingTransaction.line_type,
+          amount: editingTransaction.amount,
+          period_id: editingTransaction.period_id,
+          notes: '',
+        }
+      : {
+          transaction_date: new Date().toISOString().slice(0, 10),
+          account_code: '',
+          label: '',
+          department: departments[0],
+          line_type: 'REVENUE',
+          amount: '',
+          period_id: periods[0]?.id ?? '',
+          notes: '',
+        },
   });
 
   const createMutation = useMutation({
@@ -234,8 +248,28 @@ function AddTransactionModal({
     },
   });
 
+  const updateMutation = useMutation({
+    mutationFn: (values: AddTransactionFormValues) =>
+      apiClient.put(`/transactions/${editingTransaction!.id}`, {
+        transaction_date: values.transaction_date,
+        account_code: values.account_code.trim(),
+        label: values.label.trim(),
+        department: values.department,
+        line_type: values.line_type,
+        amount: Number(values.amount).toFixed(2),
+        period_id: values.period_id,
+        notes: values.notes?.trim() || undefined,
+      }),
+    onSuccess: () => onSuccess(),
+    onError: (err: any) => {
+      setError(err.response?.data?.message ?? 'Erreur lors de la modification');
+    },
+  });
+
+  const isEditing = !!editingTransaction;
+
   return (
-    <ModalShell title="Saisir une transaction" onClose={onClose}>
+    <ModalShell title={isEditing ? 'Modifier la transaction' : 'Saisir une transaction'} onClose={onClose}>
       <div style={{ display: 'grid', gap: 12 }}>
         <div>
           <FieldLabel htmlFor="transaction-date">Date de transaction *</FieldLabel>
@@ -339,20 +373,20 @@ function AddTransactionModal({
           type="button"
           onClick={handleSubmit((values) => {
             setError('');
-            createMutation.mutate(values);
+            isEditing ? updateMutation.mutate(values) : createMutation.mutate(values);
           })}
-          disabled={createMutation.isPending}
+          disabled={isEditing ? updateMutation.isPending : createMutation.isPending}
           style={{
             padding: '8px 18px',
             borderRadius: 8,
             border: 'none',
-            background: createMutation.isPending ? 'var(--text-lo)' : 'var(--terra)',
+            background: isEditing ? updateMutation.isPending : createMutation.isPending ? 'var(--text-lo)' : 'var(--terra)',
             color: '#fff',
             cursor: 'pointer',
             fontWeight: 600,
           }}
         >
-          {createMutation.isPending ? 'Création...' : 'Créer'}
+          {isEditing ? (updateMutation.isPending ? 'Modification...' : 'Enregistrer') : createMutation.isPending ? 'Création...' : 'Créer'}
         </button>
       </div>
     </ModalShell>
@@ -601,6 +635,7 @@ export default function TransactionsPage() {
   });
   const [showAddModal, setShowAddModal] = useState(false);
   const [showImportModal, setShowImportModal] = useState(false);
+  const [editingTransaction, setEditingTransaction] = useState<Transaction | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
 
   const queryClient = useQueryClient();
@@ -645,6 +680,13 @@ export default function TransactionsPage() {
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ['transactions'] });
       setSelectedIds([]);
+    },
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: (id: string) => apiClient.delete(`/transactions/${id}`),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['transactions'] });
     },
   });
 
@@ -806,7 +848,7 @@ export default function TransactionsPage() {
                     }}
                   />
                 </th>
-                {['Date', 'Code', 'Libellé', 'Département', 'Type', 'Montant', 'Statut'].map((header) => (
+                {['Date', 'Code', 'Libellé', 'Département', 'Type', 'Montant', 'Statut', 'Actions'].map((header) => (
                   <th
                     key={header}
                     style={{
@@ -896,6 +938,48 @@ export default function TransactionsPage() {
                         {transaction.is_validated ? 'Validée' : 'En attente'}
                       </span>
                     </td>
+                    {!transaction.is_validated && (
+                      <td style={{ padding: '8px 12px', whiteSpace: 'nowrap' }}>
+                        <button
+                          onClick={() => {
+                            setEditingTransaction(transaction);
+                            setShowAddModal(true);
+                          }}
+                          title="Modifier"
+                          style={{
+                            padding: '4px 10px',
+                            marginRight: 6,
+                            fontSize: 12,
+                            border: '1px solid var(--border)',
+                            borderRadius: 6,
+                            background: 'var(--surface)',
+                            cursor: 'pointer',
+                            color: 'var(--indigo)',
+                          }}
+                        >
+                          Modifier
+                        </button>
+                        <button
+                          onClick={() => {
+                            if (window.confirm('Supprimer cette transaction ?')) {
+                              deleteMutation.mutate(transaction.id);
+                            }
+                          }}
+                          title="Supprimer"
+                          style={{
+                            padding: '4px 10px',
+                            fontSize: 12,
+                            border: '1px solid var(--terra)',
+                            borderRadius: 6,
+                            background: 'transparent',
+                            cursor: 'pointer',
+                            color: 'var(--terra)',
+                          }}
+                        >
+                          Supprimer
+                        </button>
+                      </td>
+                    )}
                   </tr>
                 );
               })}
@@ -932,11 +1016,16 @@ export default function TransactionsPage() {
       {showAddModal && periodsQuery.data ? (
         <AddTransactionModal
           periods={periodsQuery.data}
-          onClose={() => setShowAddModal(false)}
+          onClose={() => {
+            setShowAddModal(false);
+            setEditingTransaction(null);
+          }}
           onSuccess={async () => {
             await queryClient.invalidateQueries({ queryKey: ['transactions'] });
             setShowAddModal(false);
+            setEditingTransaction(null);
           }}
+          editingTransaction={editingTransaction}
         />
       ) : null}
 

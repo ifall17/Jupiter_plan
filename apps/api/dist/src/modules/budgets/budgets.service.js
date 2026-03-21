@@ -275,6 +275,22 @@ let BudgetsService = BudgetsService_1 = class BudgetsService {
         const refreshed = await this.ensureOwnedBudget(budget.id, currentUser.org_id);
         return this.toBudgetResponse(refreshed);
     }
+    async deleteLine(currentUser, budgetId, lineId) {
+        const budget = await this.ensureOwnedBudget(budgetId, currentUser.org_id);
+        if (budget.status !== client_1.BudgetStatus.DRAFT && budget.status !== client_1.BudgetStatus.REJECTED) {
+            throw new common_1.BadRequestException({ code: BUDGET_ERROR_CODES.BUDGET_LOCKED });
+        }
+        if (currentUser.role === enums_1.UserRole.CONTRIBUTEUR) {
+            const line = budget.budget_lines.find((l) => l.id === lineId);
+            const allowedDepartments = await this.budgetsRepository.getContributorDepartments(currentUser.sub);
+            if (!line || !allowedDepartments.includes(line.department)) {
+                throw new common_1.NotFoundException();
+            }
+        }
+        await this.budgetsRepository.deleteLineById(budgetId, currentUser.org_id, lineId);
+        const refreshed = await this.ensureOwnedBudget(budgetId, currentUser.org_id);
+        return this.toBudgetResponse(this.filterByRoleAndDepartment(refreshed, currentUser));
+    }
     async deleteBudget(currentUser, budgetId) {
         const budget = await this.ensureOwnedBudget(budgetId, currentUser.org_id);
         if (budget.status === client_1.BudgetStatus.LOCKED || budget.status === client_1.BudgetStatus.APPROVED) {
@@ -353,6 +369,7 @@ let BudgetsService = BudgetsService_1 = class BudgetsService {
                 return {
                     id: line.id,
                     period_id: line.period_id,
+                    period_label: line.period?.label ?? '',
                     account_code: line.account_code,
                     account_label: line.account_label,
                     department: line.department,

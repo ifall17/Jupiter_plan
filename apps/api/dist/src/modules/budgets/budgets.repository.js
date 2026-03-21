@@ -87,6 +87,7 @@ let BudgetsRepository = class BudgetsRepository extends base_repository_1.BaseRe
             include: {
                 budget_lines: {
                     orderBy: { account_code: 'asc' },
+                    include: { period: { select: { label: true } } },
                 },
             },
         });
@@ -99,20 +100,19 @@ let BudgetsRepository = class BudgetsRepository extends base_repository_1.BaseRe
         if (params.status) {
             where.status = params.status;
         }
-        const [items, total] = await this.prisma.$transaction([
-            this.prisma.budget.findMany({
-                where,
-                skip: params.skip,
-                take: params.take,
-                orderBy: { created_at: 'desc' },
-                include: {
-                    budget_lines: {
-                        orderBy: { account_code: 'asc' },
-                    },
+        const items = (await this.prisma.budget.findMany({
+            where,
+            skip: params.skip,
+            take: params.take,
+            orderBy: { created_at: 'desc' },
+            include: {
+                budget_lines: {
+                    orderBy: { account_code: 'asc' },
+                    include: { period: { select: { label: true } } },
                 },
-            }),
-            this.prisma.budget.count({ where }),
-        ]);
+            },
+        }));
+        const total = await this.prisma.budget.count({ where });
         return { items, total };
     }
     async getNextVersion(orgId, fiscalYearId) {
@@ -158,6 +158,11 @@ let BudgetsRepository = class BudgetsRepository extends base_repository_1.BaseRe
                     },
                 });
             }
+        });
+    }
+    async deleteLineById(budgetId, orgId, lineId) {
+        await this.prisma.budgetLine.deleteMany({
+            where: { id: lineId, budget_id: budgetId, org_id: orgId },
         });
     }
     async setStatus(budgetId, orgId, data) {

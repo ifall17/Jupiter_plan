@@ -159,6 +159,64 @@ let TransactionsService = class TransactionsService {
         });
         return result;
     }
+    async update(currentUser, id, dto) {
+        const transaction = await this.prisma.transaction.findFirst({
+            where: { id, org_id: currentUser.org_id },
+        });
+        if (!transaction) {
+            throw new common_1.BadRequestException('Transaction not found');
+        }
+        if (transaction.is_validated) {
+            throw new common_1.BadRequestException('Cannot modify a validated transaction');
+        }
+        if (dto.period_id && dto.period_id !== transaction.period_id) {
+            await this.ensurePeriodBelongsToOrg(dto.period_id, currentUser.org_id);
+        }
+        let signedAmount = transaction.amount;
+        if (dto.amount) {
+            let amount;
+            try {
+                amount = new client_1.Prisma.Decimal(dto.amount);
+            }
+            catch {
+                throw new common_1.BadRequestException('Amount must be positive');
+            }
+            if (amount.lte(new client_1.Prisma.Decimal('0'))) {
+                throw new common_1.BadRequestException('Amount must be positive');
+            }
+            const lineType = dto.line_type ?? this.getLineTypeFromAmount(transaction.amount);
+            signedAmount =
+                lineType === client_1.LineType.EXPENSE ? amount.abs().negated() : amount.abs();
+        }
+        const updated = await this.prisma.transaction.update({
+            where: { id },
+            data: {
+                period_id: dto.period_id ?? transaction.period_id,
+                account_code: dto.account_code ? dto.account_code.trim() : transaction.account_code,
+                account_label: dto.label ? dto.label.trim() : transaction.account_label,
+                department: dto.department ?? transaction.department,
+                amount: signedAmount,
+                created_at: dto.transaction_date ? new Date(dto.transaction_date) : transaction.created_at,
+            },
+            include: { period: { select: { id: true, label: true } } },
+        });
+        return this.toResponse(updated);
+    }
+    async delete(currentUser, id) {
+        const transaction = await this.prisma.transaction.findFirst({
+            where: { id, org_id: currentUser.org_id },
+        });
+        if (!transaction) {
+            throw new common_1.BadRequestException('Transaction not found');
+        }
+        if (transaction.is_validated) {
+            throw new common_1.BadRequestException('Cannot delete a validated transaction');
+        }
+        await this.prisma.transaction.delete({
+            where: { id },
+        });
+        return { success: true };
+    }
     async syncBudgetLines(orgId, trx = this.prisma) {
         const periods = await trx.period.findMany({
             where: { organization: { id: orgId } },
@@ -217,6 +275,9 @@ let TransactionsService = class TransactionsService {
         if (!period) {
             throw new common_1.UnauthorizedException();
         }
+    }
+    getLineTypeFromAmount(amount) {
+        return amount.gte(new client_1.Prisma.Decimal('0')) ? client_1.LineType.REVENUE : client_1.LineType.EXPENSE;
     }
     toResponse(item) {
         const isRevenue = item.amount.gte(new client_1.Prisma.Decimal('0'));

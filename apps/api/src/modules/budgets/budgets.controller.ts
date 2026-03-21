@@ -85,6 +85,18 @@ export class BudgetsController {
     return this.budgetsService.updateLines(this.getCurrentUser(req), id, dto);
   }
 
+  @Delete(':id/lines/:lineId')
+  @HttpCode(200)
+  @Roles(UserRole.SUPER_ADMIN, UserRole.FPA, UserRole.CONTRIBUTEUR)
+  @UseGuards(JwtAuthGuard, RolesGuard, OrgGuard, DeptGuard)
+  async deleteLine(
+    @Req() req: Request,
+    @Param('id') id: string,
+    @Param('lineId') lineId: string,
+  ): Promise<BudgetResponseDto> {
+    return this.budgetsService.deleteLine(this.getCurrentUser(req), id, lineId);
+  }
+
   @Post(':id/submit')
   @HttpCode(200)
   @Roles(UserRole.SUPER_ADMIN, UserRole.FPA, UserRole.CONTRIBUTEUR)

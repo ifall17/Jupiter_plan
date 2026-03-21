@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Patch, Post, Query, Req, UnauthorizedException, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, HttpCode, Param, Patch, Post, Put, Query, Req, UnauthorizedException, UseGuards } from '@nestjs/common';
 import { Request } from 'express';
 import { LineType, UserRole } from '@prisma/client';
 import { Roles } from '../../common/decorators/roles.decorator';
@@ -7,6 +7,7 @@ import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { OrgGuard } from '../../common/guards/org.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { CreateTransactionDto } from './dto/create-transaction.dto';
+import { UpdateTransactionDto } from './dto/update-transaction.dto';
 import { TransactionResponseDto } from './dto/transaction-response.dto';
 import { ValidateBatchDto } from './dto/validate-batch.dto';
 import { TransactionsCurrentUser, TransactionsService } from './transactions.service';
@@ -50,6 +51,26 @@ export class TransactionsController {
   @UseGuards(JwtAuthGuard, RolesGuard, OrgGuard)
   async create(@Req() req: Request, @Body() dto: CreateTransactionDto): Promise<TransactionResponseDto> {
     return this.transactionsService.create(this.getCurrentUser(req), dto);
+  }
+
+  @Put(':id')
+  @HttpCode(200)
+  @Roles(UserRole.SUPER_ADMIN, UserRole.FPA, UserRole.CONTRIBUTEUR)
+  @UseGuards(JwtAuthGuard, RolesGuard, OrgGuard)
+  async update(
+    @Req() req: Request,
+    @Param('id') id: string,
+    @Body() dto: UpdateTransactionDto,
+  ): Promise<TransactionResponseDto> {
+    return this.transactionsService.update(this.getCurrentUser(req), id, dto);
+  }
+
+  @Delete(':id')
+  @HttpCode(200)
+  @Roles(UserRole.SUPER_ADMIN, UserRole.FPA, UserRole.CONTRIBUTEUR)
+  @UseGuards(JwtAuthGuard, RolesGuard, OrgGuard)
+  async delete(@Req() req: Request, @Param('id') id: string): Promise<{ success: boolean }> {
+    return this.transactionsService.delete(this.getCurrentUser(req), id);
   }
 
   @Patch('validate-batch')

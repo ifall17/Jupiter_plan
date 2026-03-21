@@ -51,6 +51,9 @@ let BudgetsController = class BudgetsController {
     async updateLines(req, id, dto) {
         return this.budgetsService.updateLines(this.getCurrentUser(req), id, dto);
     }
+    async deleteLine(req, id, lineId) {
+        return this.budgetsService.deleteLine(this.getCurrentUser(req), id, lineId);
+    }
     async submit(req, id) {
         return this.budgetsService.submitBudget(this.getCurrentUser(req), id, this.extractIp(req));
     }
@@ -149,6 +152,18 @@ __decorate([
     __metadata("design:paramtypes", [Object, String, update_budget_line_dto_1.UpdateBudgetLineDto]),
     __metadata("design:returntype", Promise)
 ], BudgetsController.prototype, "updateLines", null);
+__decorate([
+    (0, common_1.Delete)(':id/lines/:lineId'),
+    (0, common_1.HttpCode)(200),
+    (0, roles_decorator_1.Roles)(enums_1.UserRole.SUPER_ADMIN, enums_1.UserRole.FPA, enums_1.UserRole.CONTRIBUTEUR),
+    (0, common_1.UseGuards)(jwt_auth_guard_1.JwtAuthGuard, roles_guard_1.RolesGuard, org_guard_1.OrgGuard, dept_guard_1.DeptGuard),
+    __param(0, (0, common_1.Req)()),
+    __param(1, (0, common_1.Param)('id')),
+    __param(2, (0, common_1.Param)('lineId')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Object, String, String]),
+    __metadata("design:returntype", Promise)
+], BudgetsController.prototype, "deleteLine", null);
 __decorate([
     (0, common_1.Post)(':id/submit'),
     (0, common_1.HttpCode)(200),

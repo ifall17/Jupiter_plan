@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   HttpCode,
   Param,
@@ -98,6 +99,14 @@ export class UsersController {
     @Param('id') id: string,
   ): Promise<{ success: true; is_active: boolean }> {
     return this.usersService.toggleUser(this.getCurrentUser(req), id, this.extractIp(req));
+  }
+
+  @Delete(':id')
+  @HttpCode(200)
+  @Roles(UserRole.SUPER_ADMIN)
+  @UseGuards(JwtAuthGuard, RolesGuard, OrgGuard)
+  async delete(@Req() req: Request, @Param('id') id: string): Promise<{ success: true }> {
+    return this.usersService.deleteUser(this.getCurrentUser(req), id, this.extractIp(req));
   }
 
   private getCurrentUser(req: Request): CurrentUserPayload {

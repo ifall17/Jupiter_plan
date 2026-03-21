@@ -3,6 +3,7 @@ import { BudgetStatus, LineType } from '@prisma/client';
 export class BudgetLineResponseDto {
   id!: string;
   period_id!: string;
+  period_label!: string;
   account_code!: string;
   account_label!: string;
   department!: string;

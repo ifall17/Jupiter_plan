@@ -8,6 +8,7 @@ import { BudgetLineDto } from './dto/update-budget-line.dto';
 export type RepoBudgetLine = {
   id: string;
   period_id: string;
+  period?: { label: string };
   account_code: string;
   account_label: string;
   department: string;
@@ -122,9 +123,10 @@ export class BudgetsRepository extends BaseRepository<RepoBudget> {
       include: {
         budget_lines: {
           orderBy: { account_code: 'asc' },
+          include: { period: { select: { label: true } } },
         },
       },
-    });
+    }) as unknown as RepoBudget | null;
   }
 
   async findPaginated(params: {
@@ -144,20 +146,19 @@ export class BudgetsRepository extends BaseRepository<RepoBudget> {
       where.status = params.status;
     }
 
-    const [items, total] = await this.prisma.$transaction([
-      this.prisma.budget.findMany({
-        where,
-        skip: params.skip,
-        take: params.take,
-        orderBy: { created_at: 'desc' },
-        include: {
-          budget_lines: {
-            orderBy: { account_code: 'asc' },
-          },
+    const items = (await this.prisma.budget.findMany({
+      where,
+      skip: params.skip,
+      take: params.take,
+      orderBy: { created_at: 'desc' },
+      include: {
+        budget_lines: {
+          orderBy: { account_code: 'asc' },
+          include: { period: { select: { label: true } } },
         },
-      }),
-      this.prisma.budget.count({ where }),
-    ]);
+      },
+    })) as unknown as RepoBudget[];
+    const total = await this.prisma.budget.count({ where });
 
     return { items, total };
   }
@@ -213,6 +214,12 @@ export class BudgetsRepository extends BaseRepository<RepoBudget> {
           },
         });
       }
+    });
+  }
+
+  async deleteLineById(budgetId: string, orgId: string, lineId: string): Promise<void> {
+    await this.prisma.budgetLine.deleteMany({
+      where: { id: lineId, budget_id: budgetId, org_id: orgId },
     });
   }
 

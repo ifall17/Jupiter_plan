@@ -204,6 +204,87 @@ export class TransactionsService {
     return result;
   }
 
+  async update(
+    currentUser: TransactionsCurrentUser,
+    id: string,
+    dto: UpdateTransactionDto,
+  ): Promise<TransactionResponseDto> {
+    // Check if transaction exists and belongs to current user's org
+    const transaction = await this.prisma.transaction.findFirst({
+      where: { id, org_id: currentUser.org_id },
+    });
+
+    if (!transaction) {
+      throw new BadRequestException('Transaction not found');
+    }
+
+    // Only allow edit if not validated
+    if (transaction.is_validated) {
+      throw new BadRequestException('Cannot modify a validated transaction');
+    }
+
+    // Validate period if changing it
+    if (dto.period_id && dto.period_id !== transaction.period_id) {
+      await this.ensurePeriodBelongsToOrg(dto.period_id, currentUser.org_id);
+    }
+
+    // Parse and validate amount if provided
+    let signedAmount = transaction.amount;
+    if (dto.amount) {
+      let amount: Prisma.Decimal;
+      try {
+        amount = new Prisma.Decimal(dto.amount);
+      } catch {
+        throw new BadRequestException('Amount must be positive');
+      }
+
+      if (amount.lte(new Prisma.Decimal('0'))) {
+        throw new BadRequestException('Amount must be positive');
+      }
+
+      const lineType = dto.line_type ?? this.getLineTypeFromAmount(transaction.amount);
+      signedAmount =
+        lineType === LineType.EXPENSE ? amount.abs().negated() : amount.abs();
+    }
+
+    const updated = await this.prisma.transaction.update({
+      where: { id },
+      data: {
+        period_id: dto.period_id ?? transaction.period_id,
+        account_code: dto.account_code ? dto.account_code.trim() : transaction.account_code,
+        account_label: dto.label ? dto.label.trim() : transaction.account_label,
+        department: dto.department ?? transaction.department,
+        amount: signedAmount,
+        created_at: dto.transaction_date ? new Date(dto.transaction_date) : transaction.created_at,
+      },
+      include: { period: { select: { id: true, label: true } } },
+    });
+
+    return this.toResponse(updated);
+  }
+
+  async delete(currentUser: TransactionsCurrentUser, id: string): Promise<{ success: boolean }> {
+    // Check if transaction exists and belongs to current user's org
+    const transaction = await this.prisma.transaction.findFirst({
+      where: { id, org_id: currentUser.org_id },
+    });
+
+    if (!transaction) {
+      throw new BadRequestException('Transaction not found');
+    }
+
+    // Only allow delete if not validated
+    if (transaction.is_validated) {
+      throw new BadRequestException('Cannot delete a validated transaction');
+    }
+
+    await this.prisma.transaction.delete({
+      where: { id },
+    });
+
+    return { success: true };
+  }
+
   private async syncBudgetLines(orgId: string, trx: any = this.prisma) {
     // Get all periods for org to determine what to sync
     const periods = await trx.period.findMany({
@@ -276,6 +357,10 @@ export class TransactionsService {
     if (!period) {
       throw new UnauthorizedException();
     }
+  }
+
+  private getLineTypeFromAmount(amount: Prisma.Decimal): LineType {
+    return amount.gte(new Prisma.Decimal('0')) ? LineType.REVENUE : LineType.EXPENSE;
   }
 
   private toResponse(item: {

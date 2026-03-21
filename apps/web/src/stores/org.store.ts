@@ -5,7 +5,9 @@ interface OrgState {
   orgName: string | null;
   currency: string;
   currentPeriod: string | null;
+  currentPeriodLabel: string | null;
   fiscalYearId: string | null;
+  fiscalYearLabel: string | null;
   setOrg: (org: Partial<OrgState>) => void;
   reset: () => void;
 }
@@ -15,7 +17,9 @@ const initialState = {
   orgName: null,
   currency: 'XOF',
   currentPeriod: null,
+  currentPeriodLabel: null,
   fiscalYearId: null,
+  fiscalYearLabel: null,
 };
 
 export const useOrgStore = create<OrgState>((set) => ({

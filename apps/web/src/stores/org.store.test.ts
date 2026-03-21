@@ -17,7 +17,9 @@ describe('org.store', () => {
       orgId: 'org-2',
       orgName: 'Org Two',
       currentPeriod: 'p1',
+      currentPeriodLabel: 'P01 Janvier',
       fiscalYearId: 'fy-2025',
+      fiscalYearLabel: 'FY2025',
     });
 
     useOrgStore.getState().reset();
@@ -27,7 +29,9 @@ describe('org.store', () => {
       orgName: null,
       currency: 'XOF',
       currentPeriod: null,
+      currentPeriodLabel: null,
       fiscalYearId: null,
+      fiscalYearLabel: null,
     });
   });
 });

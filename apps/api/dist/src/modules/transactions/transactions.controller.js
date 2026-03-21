@@ -20,6 +20,7 @@ const jwt_auth_guard_1 = require("../../common/guards/jwt-auth.guard");
 const org_guard_1 = require("../../common/guards/org.guard");
 const roles_guard_1 = require("../../common/guards/roles.guard");
 const create_transaction_dto_1 = require("./dto/create-transaction.dto");
+const update_transaction_dto_1 = require("./dto/update-transaction.dto");
 const validate_batch_dto_1 = require("./dto/validate-batch.dto");
 const transactions_service_1 = require("./transactions.service");
 let TransactionsController = class TransactionsController {
@@ -43,6 +44,12 @@ let TransactionsController = class TransactionsController {
     }
     async create(req, dto) {
         return this.transactionsService.create(this.getCurrentUser(req), dto);
+    }
+    async update(req, id, dto) {
+        return this.transactionsService.update(this.getCurrentUser(req), id, dto);
+    }
+    async delete(req, id) {
+        return this.transactionsService.delete(this.getCurrentUser(req), id);
     }
     async validateBatch(req, dto) {
         return this.transactionsService.validateBatch(this.getCurrentUser(req), dto.ids);
@@ -90,6 +97,29 @@ __decorate([
     __metadata("design:paramtypes", [Object, create_transaction_dto_1.CreateTransactionDto]),
     __metadata("design:returntype", Promise)
 ], TransactionsController.prototype, "create", null);
+__decorate([
+    (0, common_1.Put)(':id'),
+    (0, common_1.HttpCode)(200),
+    (0, roles_decorator_1.Roles)(client_1.UserRole.SUPER_ADMIN, client_1.UserRole.FPA, client_1.UserRole.CONTRIBUTEUR),
+    (0, common_1.UseGuards)(jwt_auth_guard_1.JwtAuthGuard, roles_guard_1.RolesGuard, org_guard_1.OrgGuard),
+    __param(0, (0, common_1.Req)()),
+    __param(1, (0, common_1.Param)('id')),
+    __param(2, (0, common_1.Body)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Object, String, update_transaction_dto_1.UpdateTransactionDto]),
+    __metadata("design:returntype", Promise)
+], TransactionsController.prototype, "update", null);
+__decorate([
+    (0, common_1.Delete)(':id'),
+    (0, common_1.HttpCode)(200),
+    (0, roles_decorator_1.Roles)(client_1.UserRole.SUPER_ADMIN, client_1.UserRole.FPA, client_1.UserRole.CONTRIBUTEUR),
+    (0, common_1.UseGuards)(jwt_auth_guard_1.JwtAuthGuard, roles_guard_1.RolesGuard, org_guard_1.OrgGuard),
+    __param(0, (0, common_1.Req)()),
+    __param(1, (0, common_1.Param)('id')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Object, String]),
+    __metadata("design:returntype", Promise)
+], TransactionsController.prototype, "delete", null);
 __decorate([
     (0, common_1.Patch)('validate-batch'),
     (0, roles_decorator_1.Roles)(client_1.UserRole.SUPER_ADMIN, client_1.UserRole.FPA),

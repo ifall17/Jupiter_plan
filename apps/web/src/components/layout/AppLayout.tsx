@@ -15,7 +15,9 @@ type OrgInfo = {
   name: string;
   currency: string;
   current_period_id: string | null;
+  current_period_label: string | null;
   fiscal_year_id: string | null;
+  fiscal_year_label: string | null;
 };
 
 export default function AppLayout(): JSX.Element {
@@ -58,7 +60,9 @@ export default function AppLayout(): JSX.Element {
       orgName: orgQuery.data.name,
       currency: orgQuery.data.currency,
       currentPeriod: orgQuery.data.current_period_id,
+      currentPeriodLabel: orgQuery.data.current_period_label,
       fiscalYearId: orgQuery.data.fiscal_year_id,
+      fiscalYearLabel: orgQuery.data.fiscal_year_label,
     });
   }, [orgQuery.data, setOrg]);
 
