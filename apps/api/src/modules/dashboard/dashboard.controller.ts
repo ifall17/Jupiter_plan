@@ -34,6 +34,18 @@ export class DashboardController {
     );
   }
 
+  @Get('monthly')
+  @Roles(UserRole.SUPER_ADMIN, UserRole.FPA, UserRole.LECTEUR)
+  @UseGuards(JwtAuthGuard, RolesGuard, OrgGuard)
+  async getMonthly(@Req() req: Request): Promise<{
+    monthly: Array<{ month: string; revenue: number; expenses: number; ebitda: number }>;
+    expensesByDept: Array<{ name: string; value: number }>;
+    budgetVsActualByDept: Array<{ department: string; budget: number; actual: number }>;
+  }> {
+    const currentUser = this.getCurrentUser(req);
+    return this.dashboardService.getMonthlyData(currentUser.org_id);
+  }
+
   private getCurrentUser(req: Request): DashboardCurrentUser {
     const user = req.user as DashboardCurrentUser | undefined;
     if (!user?.sub || !user.org_id) {

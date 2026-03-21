@@ -17,6 +17,112 @@ let CashFlowService = class CashFlowService {
     constructor(cashFlowRepository) {
         this.cashFlowRepository = cashFlowRepository;
     }
+    async getAnalysis(currentUser, params) {
+        const periodIds = await this.resolvePeriodIds(currentUser.org_id, {
+            period_id: params?.period_id,
+            ytd: params?.ytd,
+            quarter: params?.quarter,
+            from_period: params?.from_period,
+            to_period: params?.to_period,
+        });
+        const plans = await this.cashFlowRepository.findRollingPlans({
+            org_id: currentUser.org_id,
+            period_ids: periodIds.length > 0 ? periodIds : undefined,
+        });
+        const zero = new client_1.Prisma.Decimal('0');
+        const now = new Date();
+        now.setHours(0, 0, 0, 0);
+        const weekMs = 7 * 24 * 60 * 60 * 1000;
+        const normalizeAmount = (plan) => {
+            if (plan.amount.gt(zero)) {
+                return plan.amount;
+            }
+            return plan.direction === client_1.CashFlowDirection.IN ? plan.inflow : plan.outflow;
+        };
+        const inflows = plans.filter((plan) => plan.direction === client_1.CashFlowDirection.IN);
+        const outflows = plans.filter((plan) => plan.direction === client_1.CashFlowDirection.OUT);
+        const totalIn = inflows.reduce((sum, plan) => sum.plus(normalizeAmount(plan)), zero);
+        const totalOut = outflows.reduce((sum, plan) => sum.plus(normalizeAmount(plan)), zero);
+        const netCash = totalIn.minus(totalOut);
+        const coverage = totalOut.gt(zero) ? totalIn.div(totalOut) : zero;
+        const weeklyBurn = totalOut.gt(zero) ? totalOut.div(new client_1.Prisma.Decimal('13')) : zero;
+        const runway = weeklyBurn.gt(zero)
+            ? netCash.div(weeklyBurn).toDecimalPlaces(0, client_1.Prisma.Decimal.ROUND_FLOOR).toNumber()
+            : 0;
+        const byTypeMap = new Map();
+        plans.forEach((plan) => {
+            const current = byTypeMap.get(plan.flow_type) ?? {
+                type: plan.flow_type,
+                inflows: zero,
+                outflows: zero,
+            };
+            const amount = normalizeAmount(plan);
+            byTypeMap.set(plan.flow_type, {
+                type: plan.flow_type,
+                inflows: plan.direction === client_1.CashFlowDirection.IN ? current.inflows.plus(amount) : current.inflows,
+                outflows: plan.direction === client_1.CashFlowDirection.OUT ? current.outflows.plus(amount) : current.outflows,
+            });
+        });
+        const weeklyNet = Array.from({ length: 13 }, (_, index) => {
+            const weekInflows = inflows.reduce((sum, plan) => {
+                const weekIndex = this.resolveWeekIndex(plan, now, weekMs);
+                return weekIndex === index ? sum.plus(normalizeAmount(plan)) : sum;
+            }, zero);
+            const weekOutflows = outflows.reduce((sum, plan) => {
+                const weekIndex = this.resolveWeekIndex(plan, now, weekMs);
+                return weekIndex === index ? sum.plus(normalizeAmount(plan)) : sum;
+            }, zero);
+            return {
+                week: `S${index + 1}`,
+                net: weekInflows.minus(weekOutflows).toDecimalPlaces(0, client_1.Prisma.Decimal.ROUND_HALF_UP).toNumber(),
+            };
+        });
+        const topInflows = [...inflows]
+            .sort((left, right) => normalizeAmount(right).comparedTo(normalizeAmount(left)))
+            .slice(0, 5)
+            .map((plan) => ({
+            label: plan.label,
+            flow_type: plan.flow_type,
+            amount: normalizeAmount(plan).toDecimalPlaces(0, client_1.Prisma.Decimal.ROUND_HALF_UP).toNumber(),
+        }));
+        const topOutflows = [...outflows]
+            .sort((left, right) => normalizeAmount(right).comparedTo(normalizeAmount(left)))
+            .slice(0, 5)
+            .map((plan) => ({
+            label: plan.label,
+            flow_type: plan.flow_type,
+            amount: normalizeAmount(plan).toDecimalPlaces(0, client_1.Prisma.Decimal.ROUND_HALF_UP).toNumber(),
+        }));
+        const burnRate = totalOut.div(new client_1.Prisma.Decimal('3')).toDecimalPlaces(0, client_1.Prisma.Decimal.ROUND_HALF_UP).toNumber();
+        const top3Inflows = [...inflows]
+            .sort((left, right) => normalizeAmount(right).comparedTo(normalizeAmount(left)))
+            .slice(0, 3)
+            .reduce((sum, plan) => sum.plus(normalizeAmount(plan)), zero);
+        const inflowConcentration = totalIn.gt(zero)
+            ? top3Inflows.div(totalIn).mul(new client_1.Prisma.Decimal('100'))
+            : zero;
+        return {
+            net_cash: netCash.toDecimalPlaces(0, client_1.Prisma.Decimal.ROUND_HALF_UP).toNumber(),
+            coverage_ratio: coverage.toDecimalPlaces(2, client_1.Prisma.Decimal.ROUND_HALF_UP).toNumber(),
+            runway_weeks: runway,
+            by_type: Array.from(byTypeMap.values()).map((entry) => ({
+                type: entry.type,
+                inflows: entry.inflows.toDecimalPlaces(0, client_1.Prisma.Decimal.ROUND_HALF_UP).toNumber(),
+                outflows: entry.outflows.toDecimalPlaces(0, client_1.Prisma.Decimal.ROUND_HALF_UP).toNumber(),
+            })),
+            weekly_net: weeklyNet,
+            top_inflows: topInflows,
+            top_outflows: topOutflows,
+            ratios: {
+                COVERAGE: coverage.toDecimalPlaces(2, client_1.Prisma.Decimal.ROUND_HALF_UP).toNumber(),
+                BURN_RATE: burnRate,
+                CASH_CONVERSION: 30,
+                INFLOW_CONCENTRATION: inflowConcentration.toDecimalPlaces(1, client_1.Prisma.Decimal.ROUND_HALF_UP).toNumber(),
+                RUNWAY: runway,
+                OPERATING_CF_RATIO: coverage.toDecimalPlaces(2, client_1.Prisma.Decimal.ROUND_HALF_UP).toNumber(),
+            },
+        };
+    }
     async getRollingPlan(params) {
         const periodIds = await this.resolvePeriodIds(params.org_id, {
             period_id: params.period_id,
@@ -261,6 +367,22 @@ let CashFlowService = class CashFlowService {
         }
         const runway = cashBalance.div(weeklyBurn);
         return runway.toDecimalPlaces(2, client_1.Prisma.Decimal.ROUND_HALF_UP).toNumber();
+    }
+    resolveWeekIndex(plan, now, weekMs) {
+        if (plan.planned_date) {
+            const planned = new Date(plan.planned_date);
+            planned.setHours(0, 0, 0, 0);
+            const diffWeeks = Math.floor((planned.getTime() - now.getTime()) / weekMs);
+            if (diffWeeks < 0 || diffWeeks > 12) {
+                return -1;
+            }
+            return diffWeeks;
+        }
+        const fallback = plan.week_number - 1;
+        if (fallback < 0 || fallback > 12) {
+            return -1;
+        }
+        return fallback;
     }
     toResponse(plan) {
         return {

@@ -515,6 +515,8 @@ model Kpi {
   label              String
   formula            String
   unit               String
+  category           String?
+  description        String?
   threshold_warn     Decimal?     @db.Decimal(18, 2)
   threshold_critical Decimal?     @db.Decimal(18, 2)
   is_active          Boolean      @default(true)

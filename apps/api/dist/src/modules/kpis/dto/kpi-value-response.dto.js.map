@@ -1,1 +1,1 @@
-{"version":3,"file":"kpi-value-response.dto.js","sourceRoot":"","sources":["../../../../../src/modules/kpis/dto/kpi-value-response.dto.ts"],"names":[],"mappings":";;;AAEA,MAAa,mBAAmB;CAU/B;AAVD,kDAUC"}
+{"version":3,"file":"kpi-value-response.dto.js","sourceRoot":"","sources":["../../../../../src/modules/kpis/dto/kpi-value-response.dto.ts"],"names":[],"mappings":";;;AAEA,MAAa,mBAAmB;CAc/B;AAdD,kDAcC"}

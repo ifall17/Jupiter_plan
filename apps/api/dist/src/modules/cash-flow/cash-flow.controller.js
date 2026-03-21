@@ -57,6 +57,16 @@ let CashFlowController = class CashFlowController {
             to_period: toPeriod,
         });
     }
+    async getAnalysis(req, periodId, ytd, quarter, fromPeriod, toPeriod) {
+        const quarterNumber = quarter ? Number.parseInt(quarter, 10) : undefined;
+        return this.cashFlowService.getAnalysis(this.getCurrentUser(req), {
+            period_id: periodId,
+            ytd: ytd === 'true',
+            quarter: Number.isNaN(quarterNumber ?? Number.NaN) ? undefined : quarterNumber,
+            from_period: fromPeriod,
+            to_period: toPeriod,
+        });
+    }
     async createPlanEntry(req, dto) {
         return this.cashFlowService.createPlannedEntry(this.getCurrentUser(req), dto);
     }
@@ -124,6 +134,20 @@ __decorate([
     __metadata("design:paramtypes", [Object, String, String, String, String, String]),
     __metadata("design:returntype", Promise)
 ], CashFlowController.prototype, "listPlans", null);
+__decorate([
+    (0, common_1.Get)('analysis'),
+    (0, roles_decorator_1.Roles)(enums_1.UserRole.SUPER_ADMIN, enums_1.UserRole.FPA, enums_1.UserRole.LECTEUR),
+    (0, common_1.UseGuards)(jwt_auth_guard_1.JwtAuthGuard, roles_guard_1.RolesGuard, org_guard_1.OrgGuard),
+    __param(0, (0, common_1.Req)()),
+    __param(1, (0, common_1.Query)('period_id')),
+    __param(2, (0, common_1.Query)('ytd')),
+    __param(3, (0, common_1.Query)('quarter')),
+    __param(4, (0, common_1.Query)('from_period')),
+    __param(5, (0, common_1.Query)('to_period')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Object, String, String, String, String, String]),
+    __metadata("design:returntype", Promise)
+], CashFlowController.prototype, "getAnalysis", null);
 __decorate([
     (0, common_1.Post)('plans'),
     (0, roles_decorator_1.Roles)(enums_1.UserRole.SUPER_ADMIN, enums_1.UserRole.FPA),

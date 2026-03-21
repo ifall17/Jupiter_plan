@@ -90,6 +90,27 @@ export class CashFlowController {
     });
   }
 
+  @Get('analysis')
+  @Roles(UserRole.SUPER_ADMIN, UserRole.FPA, UserRole.LECTEUR)
+  @UseGuards(JwtAuthGuard, RolesGuard, OrgGuard)
+  async getAnalysis(
+    @Req() req: Request,
+    @Query('period_id') periodId?: string,
+    @Query('ytd') ytd?: string,
+    @Query('quarter') quarter?: string,
+    @Query('from_period') fromPeriod?: string,
+    @Query('to_period') toPeriod?: string,
+  ) {
+    const quarterNumber = quarter ? Number.parseInt(quarter, 10) : undefined;
+    return this.cashFlowService.getAnalysis(this.getCurrentUser(req), {
+      period_id: periodId,
+      ytd: ytd === 'true',
+      quarter: Number.isNaN(quarterNumber ?? Number.NaN) ? undefined : quarterNumber,
+      from_period: fromPeriod,
+      to_period: toPeriod,
+    });
+  }
+
   @Post('plans')
   @Roles(UserRole.SUPER_ADMIN, UserRole.FPA)
   @UseGuards(JwtAuthGuard, RolesGuard, OrgGuard)

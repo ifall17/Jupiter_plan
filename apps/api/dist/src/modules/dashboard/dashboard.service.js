@@ -35,10 +35,14 @@ let KpisRepository = class KpisRepository {
             kpi_id: value.kpi_id,
             kpi_code: value.kpi.code,
             kpi_label: value.kpi.label,
+            category: value.kpi.category,
+            description: value.kpi.description,
             unit: value.kpi.unit,
             period_id: value.period_id,
             scenario_id: value.scenario_id,
             value: value.value.toString(),
+            threshold_warn: value.kpi.threshold_warn?.toString() ?? null,
+            threshold_critical: value.kpi.threshold_critical?.toString() ?? null,
             severity: value.severity,
             calculated_at: value.calculated_at,
         }));
@@ -95,10 +99,14 @@ let KpisRepository = class KpisRepository {
                 kpi_id: latest.kpi_id,
                 kpi_code: code,
                 kpi_label: latest.kpi.label,
+                category: latest.kpi.category,
+                description: latest.kpi.description,
                 unit: latest.kpi.unit,
                 period_id: 'YTD',
                 scenario_id: null,
                 value: aggregatedValue.toDecimalPlaces(2).toString(),
+                threshold_warn: latest.kpi.threshold_warn?.toString() ?? null,
+                threshold_critical: latest.kpi.threshold_critical?.toString() ?? null,
                 severity: latest.severity,
                 calculated_at: latest.calculated_at,
             });
@@ -578,6 +586,103 @@ let DashboardService = DashboardService_1 = class DashboardService {
             this.redisService.del(this.buildCacheKey(orgId, periodId)),
             this.redisService.delByPattern(`dashboard:${orgId}:AGG:*`),
         ]);
+    }
+    async getMonthlyData(orgId) {
+        const months = ['Jan', 'Fev', 'Mar', 'Avr', 'Mai', 'Jun', 'Jul', 'Aou', 'Sep', 'Oct', 'Nov', 'Dec'];
+        const activeFiscalYear = await this.prisma.fiscalYear.findFirst({
+            where: { org_id: orgId, status: 'ACTIVE' },
+            select: { id: true },
+            orderBy: { start_date: 'desc' },
+        });
+        if (!activeFiscalYear) {
+            return {
+                monthly: [],
+                expensesByDept: [],
+                budgetVsActualByDept: [],
+            };
+        }
+        const periods = await this.prisma.period.findMany({
+            where: { fiscal_year_id: activeFiscalYear.id },
+            orderBy: { period_number: 'asc' },
+            select: { id: true, period_number: true },
+        });
+        const periodIds = periods.map((period) => period.id);
+        const [transactions, expenseTransactions, budgetLines] = await Promise.all([
+            this.prisma.transaction.findMany({
+                where: { org_id: orgId, period_id: { in: periodIds } },
+                select: { period_id: true, amount: true, department: true },
+            }),
+            this.prisma.transaction.findMany({
+                where: { org_id: orgId, period_id: { in: periodIds }, amount: { lt: 0 } },
+                select: { amount: true, department: true },
+            }),
+            this.prisma.budgetLine.findMany({
+                where: {
+                    org_id: orgId,
+                    period_id: { in: periodIds },
+                    budget: {
+                        fiscal_year_id: activeFiscalYear.id,
+                        status: { in: [client_1.BudgetStatus.APPROVED, client_1.BudgetStatus.LOCKED] },
+                    },
+                },
+                select: { department: true, amount_budget: true },
+            }),
+        ]);
+        const monthly = periods.map((period) => {
+            const periodTx = transactions.filter((tx) => tx.period_id === period.id);
+            const revenue = periodTx
+                .filter((tx) => tx.amount.gt(0))
+                .reduce((sum, tx) => sum.plus(tx.amount), new client_1.Prisma.Decimal(0));
+            const expenses = periodTx
+                .filter((tx) => tx.amount.lt(0))
+                .reduce((sum, tx) => sum.plus(tx.amount.abs()), new client_1.Prisma.Decimal(0));
+            return {
+                month: months[Math.max(0, period.period_number - 1)] ?? `P${period.period_number}`,
+                revenue: Math.round(Number(revenue.toString())),
+                expenses: Math.round(Number(expenses.toString())),
+                ebitda: Math.round(Number(revenue.minus(expenses).toString())),
+            };
+        });
+        const expensesByDeptMap = new Map();
+        for (const tx of expenseTransactions) {
+            const dept = tx.department || 'Autre';
+            const existing = expensesByDeptMap.get(dept) ?? new client_1.Prisma.Decimal(0);
+            expensesByDeptMap.set(dept, existing.plus(tx.amount.abs()));
+        }
+        const expensesByDept = Array.from(expensesByDeptMap.entries())
+            .map(([name, value]) => ({ name, value: Math.round(Number(value.toString())) }))
+            .sort((a, b) => b.value - a.value)
+            .slice(0, 8);
+        const budgetByDeptMap = new Map();
+        for (const line of budgetLines) {
+            const dept = line.department || 'Autre';
+            const existing = budgetByDeptMap.get(dept) ?? new client_1.Prisma.Decimal(0);
+            budgetByDeptMap.set(dept, existing.plus(line.amount_budget));
+        }
+        const actualByDeptMap = new Map();
+        for (const tx of expenseTransactions) {
+            const dept = tx.department || 'Autre';
+            const existing = actualByDeptMap.get(dept) ?? new client_1.Prisma.Decimal(0);
+            actualByDeptMap.set(dept, existing.plus(tx.amount.abs()));
+        }
+        const departments = Array.from(new Set([...budgetByDeptMap.keys(), ...actualByDeptMap.keys()]));
+        const budgetVsActualByDept = departments
+            .map((department) => {
+            const budget = budgetByDeptMap.get(department) ?? new client_1.Prisma.Decimal(0);
+            const actual = actualByDeptMap.get(department) ?? new client_1.Prisma.Decimal(0);
+            return {
+                department,
+                budget: Math.round(Number(budget.toString())),
+                actual: Math.round(Number(actual.toString())),
+            };
+        })
+            .sort((a, b) => b.actual - a.actual)
+            .slice(0, 8);
+        return {
+            monthly,
+            expensesByDept,
+            budgetVsActualByDept,
+        };
     }
     async resolvePeriod(orgId, periodId) {
         const period = periodId

@@ -68,6 +68,43 @@ export const cashFlowDataSchema = z.object({
   entries_count: z.number().int().nonnegative(),
 });
 
+export const cashFlowAnalysisTypeSchema = z.object({
+  type: z.string(),
+  inflows: z.number(),
+  outflows: z.number(),
+});
+
+export const cashFlowAnalysisWeeklyNetSchema = z.object({
+  week: z.string(),
+  net: z.number(),
+});
+
+export const cashFlowAnalysisTopFlowSchema = z.object({
+  label: z.string(),
+  flow_type: z.string(),
+  amount: z.number(),
+});
+
+export const cashFlowAnalysisRatiosSchema = z.object({
+  COVERAGE: z.number(),
+  BURN_RATE: z.number(),
+  CASH_CONVERSION: z.number(),
+  INFLOW_CONCENTRATION: z.number(),
+  RUNWAY: z.number(),
+  OPERATING_CF_RATIO: z.number(),
+});
+
+export const cashFlowAnalysisSchema = z.object({
+  net_cash: z.number(),
+  coverage_ratio: z.number(),
+  runway_weeks: z.number(),
+  by_type: z.array(cashFlowAnalysisTypeSchema),
+  weekly_net: z.array(cashFlowAnalysisWeeklyNetSchema),
+  top_inflows: z.array(cashFlowAnalysisTopFlowSchema),
+  top_outflows: z.array(cashFlowAnalysisTopFlowSchema),
+  ratios: cashFlowAnalysisRatiosSchema,
+});
+
 export const plannedFlowSchema = z.object({
   id: z.string(),
   planned_date: z.string().nullable(),
@@ -94,6 +131,8 @@ export const kpiValueSchema = z.object({
   kpi_id: z.string(),
   kpi_code: z.string(),
   kpi_label: z.string(),
+  category: z.string().nullable().optional(),
+  description: z.string().nullable().optional(),
   unit: z.string(),
   period_id: z.string(),
   scenario_id: z.string().nullable(),
@@ -103,12 +142,14 @@ export const kpiValueSchema = z.object({
   status: z.string().optional(),
   label: z.string().optional(),
   threshold_warn: z.union([decimalStringSchema, z.number(), z.null()]).optional(),
+  threshold_critical: z.union([decimalStringSchema, z.number(), z.null()]).optional(),
 });
 
 export type DashboardVarianceItem = z.infer<typeof dashboardVarianceItemSchema>;
 export type DashboardData = z.infer<typeof dashboardDataSchema>;
 export type CashFlowWeek = z.infer<typeof cashFlowWeekSchema>;
 export type CashFlowData = z.infer<typeof cashFlowDataSchema>;
+export type CashFlowAnalysis = z.infer<typeof cashFlowAnalysisSchema>;
 export type PlannedFlow = z.infer<typeof plannedFlowSchema>;
 export type BankAccount = z.infer<typeof bankAccountSchema>;
 export type KpiValue = z.infer<typeof kpiValueSchema>;

@@ -36,6 +36,8 @@ let KpisService = KpisService_1 = class KpisService {
             label: kpi.label,
             formula: kpi.formula,
             unit: kpi.unit,
+            category: kpi.category,
+            description: kpi.description,
             threshold_warn: kpi.threshold_warn?.toString() ?? null,
             threshold_critical: kpi.threshold_critical?.toString() ?? null,
             is_active: kpi.is_active,
@@ -122,60 +124,110 @@ let KpisService = KpisService_1 = class KpisService {
         if (!period) {
             throw new common_1.NotFoundException('Période introuvable');
         }
+        await this.seedDefaultKpis(orgId);
         let kpiDefs = await this.prisma.kpi.findMany({
             where: { org_id: orgId, is_active: true },
         });
         this.logger.log(`${kpiDefs.length} KPIs trouves`);
         if (kpiDefs.length === 0) {
-            await this.seedDefaultKpis(orgId);
             kpiDefs = await this.prisma.kpi.findMany({
                 where: { org_id: orgId, is_active: true },
             });
             this.logger.log(`Apres seed: ${kpiDefs.length} KPIs trouves`);
         }
-        const budgetLines = await this.prisma.budgetLine.findMany({
-            where: { org_id: orgId, period_id: periodId },
-            select: { line_type: true, amount_actual: true },
-        });
-        const sumByType = (type) => budgetLines
-            .filter((l) => l.line_type === type)
-            .reduce((s, l) => s.plus(l.amount_actual), new client_1.Prisma.Decimal('0'));
-        const ca = sumByType(client_1.LineType.REVENUE);
-        const opex = sumByType(client_1.LineType.EXPENSE);
-        const ebitda = ca.minus(opex);
-        const marge = ca.gt(new client_1.Prisma.Decimal('0'))
-            ? ebitda.div(ca).mul(new client_1.Prisma.Decimal('100'))
-            : new client_1.Prisma.Decimal('0');
-        const cashAgg = await this.prisma.bankAccount.aggregate({
-            where: { org_id: orgId, is_active: true },
-            _sum: { balance: true },
-        });
-        const cash = cashAgg._sum.balance ?? new client_1.Prisma.Decimal('0');
-        const cfPlans = await this.prisma.cashFlowPlan.findMany({
-            where: { org_id: orgId, period_id: periodId },
-            select: { outflow: true, amount: true, direction: true },
-        });
-        const totalBurn = cfPlans.reduce((s, p) => {
-            const strict = p.amount;
-            return s.plus(strict.gt(new client_1.Prisma.Decimal('0')) && p.direction === 'OUT' ? strict : p.outflow);
-        }, new client_1.Prisma.Decimal('0'));
-        const avgWeeklyBurn = cfPlans.length > 0
-            ? totalBurn.div(new client_1.Prisma.Decimal(cfPlans.length.toString()))
-            : opex.div(new client_1.Prisma.Decimal('4'));
-        const runway = avgWeeklyBurn.gt(new client_1.Prisma.Decimal('0'))
-            ? cash.div(avgWeeklyBurn)
-            : new client_1.Prisma.Decimal('0');
-        const dso = ca.gt(new client_1.Prisma.Decimal('0'))
-            ? opex.div(ca).mul(new client_1.Prisma.Decimal('30'))
-            : new client_1.Prisma.Decimal('0');
+        const [transactions, budgetLines, cfPlans] = await Promise.all([
+            this.prisma.transaction.findMany({
+                where: { org_id: orgId, period_id: periodId },
+                select: { account_code: true, amount: true },
+            }),
+            this.prisma.budgetLine.findMany({
+                where: { org_id: orgId, period_id: periodId },
+                select: { line_type: true, amount_actual: true, amount_budget: true },
+            }),
+            this.prisma.cashFlowPlan.findMany({
+                where: { org_id: orgId, period_id: periodId },
+                select: { direction: true, amount: true, inflow: true, outflow: true },
+            }),
+        ]);
+        const zero = new client_1.Prisma.Decimal('0');
+        const hundred = new client_1.Prisma.Decimal('100');
+        const factorReceivables = new client_1.Prisma.Decimal('0.20');
+        const factorPayables = new client_1.Prisma.Decimal('0.30');
+        const days = new client_1.Prisma.Decimal('365');
+        const weeksQuarter = new client_1.Prisma.Decimal('13');
+        const absDecimal = (value) => (value.lt(zero) ? value.neg() : value);
+        const startsWithAny = (accountCode, prefixes) => prefixes.some((prefix) => accountCode.startsWith(prefix));
+        const sumTransactions = (predicate, absolute = true) => transactions.reduce((sum, tx) => {
+            if (!predicate(tx))
+                return sum;
+            return sum.plus(absolute ? absDecimal(tx.amount) : tx.amount);
+        }, zero);
+        const ca = sumTransactions((tx) => startsWithAny(tx.account_code, ['7']) || tx.amount.gt(zero));
+        const charges = sumTransactions((tx) => startsWithAny(tx.account_code, ['6']) || tx.amount.lt(zero));
+        const purchases = sumTransactions((tx) => startsWithAny(tx.account_code, ['601', '602']));
+        const payroll = sumTransactions((tx) => startsWithAny(tx.account_code, ['64']));
+        const opex = sumTransactions((tx) => startsWithAny(tx.account_code, ['62', '63', '64', '65']));
+        const totalBudget = budgetLines.reduce((sum, line) => sum.plus(absDecimal(line.amount_budget)), zero);
+        const ebitda = ca.minus(charges);
+        const marge = ca.gt(zero) ? ebitda.div(ca).mul(hundred) : zero;
+        const grossMargin = ca.gt(zero) ? ca.minus(purchases).div(ca).mul(hundred) : zero;
+        const roe = totalBudget.gt(zero) ? ebitda.div(totalBudget).mul(hundred) : zero;
+        const receivables = ca.mul(factorReceivables);
+        const payables = purchases.mul(factorPayables);
+        const dailyRevenue = ca.gt(zero) ? ca.div(days) : zero;
+        const dailyPurchases = purchases.gt(zero) ? purchases.div(days) : zero;
+        const dso = dailyRevenue.gt(zero) ? receivables.div(dailyRevenue) : zero;
+        const dpo = dailyPurchases.gt(zero) ? payables.div(dailyPurchases) : zero;
+        const assetTurnover = totalBudget.gt(zero) ? ca.div(totalBudget) : zero;
+        const costPerRevenue = ca.gt(zero) ? charges.div(ca).mul(hundred) : zero;
+        const opexRatio = ca.gt(zero) ? opex.div(ca).mul(hundred) : zero;
+        const payrollRatio = ca.gt(zero) ? payroll.div(ca).mul(hundred) : zero;
+        const operatingMargin = ca.gt(zero) ? ca.minus(charges).div(ca).mul(hundred) : zero;
+        const roa = totalBudget.gt(zero) ? ebitda.div(totalBudget).mul(hundred) : zero;
+        const roce = totalBudget.gt(zero) ? ebitda.div(totalBudget).mul(hundred) : zero;
+        const sumFlowByDirection = (direction) => cfPlans.reduce((sum, plan) => {
+            if (plan.direction !== direction)
+                return sum;
+            const explicit = absDecimal(plan.amount);
+            if (explicit.gt(zero))
+                return sum.plus(explicit);
+            const fallback = direction === 'OUT' ? plan.outflow : plan.inflow;
+            return sum.plus(absDecimal(fallback));
+        }, zero);
+        const inflows = sumFlowByDirection('IN');
+        const outflows = sumFlowByDirection('OUT');
+        const netCash = inflows.minus(outflows);
+        const quickAssets = inflows.mul(new client_1.Prisma.Decimal('0.70'));
+        const currentRatio = outflows.gt(zero) ? inflows.div(outflows) : zero;
+        const quickRatio = outflows.gt(zero) ? quickAssets.div(outflows) : zero;
+        const cashRatio = outflows.gt(zero) ? netCash.div(outflows) : zero;
+        const bfr = receivables.minus(payables);
+        const weeklyBurn = outflows.gt(zero) ? outflows.div(weeksQuarter) : zero;
+        const runway = weeklyBurn.gt(zero) ? netCash.div(weeklyBurn) : zero;
         const computed = {
             CA: ca,
             EBITDA: ebitda,
             MARGE: marge,
             MARGE_EBITDA: marge,
-            CHARGES: opex,
+            CHARGES: charges,
             RUNWAY: runway,
             DSO: dso,
+            GROSS_MARGIN: grossMargin,
+            EBITDA_MARGIN: marge,
+            OPERATING_MARGIN: operatingMargin,
+            NET_MARGIN: marge,
+            ROE: roe,
+            ROA: roa,
+            DPO: dpo,
+            ASSET_TURNOVER: assetTurnover,
+            COST_PER_REVENUE: costPerRevenue,
+            OPEX_RATIO: opexRatio,
+            PAYROLL_RATIO: payrollRatio,
+            ROCE: roce,
+            QUICK_RATIO: quickRatio,
+            CURRENT_RATIO: currentRatio,
+            CASH_RATIO: cashRatio,
+            BFR: bfr,
         };
         const calculatedCodes = [];
         for (const kpiDef of kpiDefs) {
@@ -235,10 +287,14 @@ let KpisService = KpisService_1 = class KpisService {
                 kpi_id: latest.kpi_id,
                 kpi_code: code,
                 kpi_label: latest.kpi.label,
+                category: latest.kpi.category,
+                description: latest.kpi.description,
                 unit: latest.kpi.unit,
                 period_id: virtualPeriodId,
                 scenario_id: null,
                 value: aggregatedValue.toDecimalPlaces(2).toString(),
+                threshold_warn: latest.kpi.threshold_warn?.toString() ?? null,
+                threshold_critical: latest.kpi.threshold_critical?.toString() ?? null,
                 severity,
                 calculated_at: latest.calculated_at,
             });
@@ -333,10 +389,182 @@ let KpisService = KpisService_1 = class KpisService {
     async seedDefaultKpis(orgId) {
         const defaults = [
             {
+                code: 'GROSS_MARGIN',
+                label: 'Marge Brute',
+                unit: '%',
+                formula: '((CA - ACHATS) / CA) * 100',
+                category: 'PROFITABILITY',
+                description: '(CA - Achats) / CA × 100',
+                threshold_warn: new client_1.Prisma.Decimal('30'),
+                threshold_critical: new client_1.Prisma.Decimal('15'),
+            },
+            {
+                code: 'EBITDA_MARGIN',
+                label: 'Marge EBITDA',
+                unit: '%',
+                formula: '(EBITDA / CA) * 100',
+                category: 'PROFITABILITY',
+                description: 'EBITDA / CA x 100',
+                threshold_warn: new client_1.Prisma.Decimal('10'),
+                threshold_critical: new client_1.Prisma.Decimal('5'),
+            },
+            {
+                code: 'OPERATING_MARGIN',
+                label: 'Marge Operationnelle',
+                unit: '%',
+                formula: '((CA - CHARGES) / CA) * 100',
+                category: 'PROFITABILITY',
+                description: "Resultat d'exploitation / CA × 100",
+                threshold_warn: new client_1.Prisma.Decimal('10'),
+                threshold_critical: new client_1.Prisma.Decimal('5'),
+            },
+            {
+                code: 'NET_MARGIN',
+                label: 'Marge Nette',
+                unit: '%',
+                formula: '(RESULTAT_NET / CA) * 100',
+                category: 'PROFITABILITY',
+                description: 'Resultat net / CA x 100',
+                threshold_warn: new client_1.Prisma.Decimal('5'),
+                threshold_critical: new client_1.Prisma.Decimal('0'),
+            },
+            {
+                code: 'ROA',
+                label: 'Rentabilite des Actifs (ROA)',
+                unit: '%',
+                formula: '(RESULTAT_NET / TOTAL_ACTIF) * 100',
+                category: 'PROFITABILITY',
+                description: 'Resultat net / Total actif × 100',
+                threshold_warn: new client_1.Prisma.Decimal('5'),
+                threshold_critical: new client_1.Prisma.Decimal('2'),
+            },
+            {
+                code: 'ROE',
+                label: 'ROE',
+                unit: '%',
+                formula: '(RESULTAT_NET / CAPITAUX_PROPRES) * 100',
+                category: 'PROFITABILITY',
+                description: 'Resultat net / Capitaux propres',
+                threshold_warn: new client_1.Prisma.Decimal('10'),
+                threshold_critical: new client_1.Prisma.Decimal('5'),
+            },
+            {
+                code: 'DSO',
+                label: 'Delai Encaissement Clients',
+                unit: 'jours',
+                formula: 'CREANCES_CLIENTS / (CA / 365)',
+                category: 'ACTIVITY',
+                description: 'Delai moyen de paiement des clients',
+                threshold_warn: new client_1.Prisma.Decimal('60'),
+                threshold_critical: new client_1.Prisma.Decimal('90'),
+            },
+            {
+                code: 'DPO',
+                label: 'Delai Paiement Fournisseurs',
+                unit: 'jours',
+                formula: 'DETTES_FOURNISSEURS / (ACHATS / 365)',
+                category: 'ACTIVITY',
+                description: 'Delai moyen de paiement fournisseurs',
+                threshold_warn: null,
+                threshold_critical: null,
+            },
+            {
+                code: 'ASSET_TURNOVER',
+                label: 'Rotation Actif',
+                unit: 'x',
+                formula: 'CA / TOTAL_ACTIF',
+                category: 'ACTIVITY',
+                description: 'CA / Total actif',
+                threshold_warn: new client_1.Prisma.Decimal('0.5'),
+                threshold_critical: new client_1.Prisma.Decimal('0.3'),
+            },
+            {
+                code: 'COST_PER_REVENUE',
+                label: 'Charges / CA',
+                unit: '%',
+                formula: '(CHARGES / CA) * 100',
+                category: 'EFFICIENCY',
+                description: 'Charges totales / CA x 100',
+                threshold_warn: new client_1.Prisma.Decimal('80'),
+                threshold_critical: new client_1.Prisma.Decimal('90'),
+            },
+            {
+                code: 'OPEX_RATIO',
+                label: 'Ratio OPEX',
+                unit: '%',
+                formula: '(OPEX / CA) * 100',
+                category: 'EFFICIENCY',
+                description: 'Charges operationnelles / CA',
+                threshold_warn: new client_1.Prisma.Decimal('40'),
+                threshold_critical: new client_1.Prisma.Decimal('55'),
+            },
+            {
+                code: 'PAYROLL_RATIO',
+                label: 'Masse Salariale / CA',
+                unit: '%',
+                formula: '(SALAIRES / CA) * 100',
+                category: 'EFFICIENCY',
+                description: 'Salaires / CA x 100',
+                threshold_warn: new client_1.Prisma.Decimal('35'),
+                threshold_critical: new client_1.Prisma.Decimal('45'),
+            },
+            {
+                code: 'ROCE',
+                label: 'Return on Capital Employed',
+                unit: '%',
+                formula: '(EBIT / CAPITAL_EMPLOYE) * 100',
+                category: 'EFFICIENCY',
+                description: 'Rendement du capital investi',
+                threshold_warn: new client_1.Prisma.Decimal('10'),
+                threshold_critical: new client_1.Prisma.Decimal('5'),
+            },
+            {
+                code: 'CURRENT_RATIO',
+                label: 'Current Ratio',
+                unit: 'x',
+                formula: 'ACTIF_CT / PASSIF_CT',
+                category: 'LIQUIDITY',
+                description: 'Capacite a honorer les dettes CT',
+                threshold_warn: new client_1.Prisma.Decimal('1.5'),
+                threshold_critical: new client_1.Prisma.Decimal('1.0'),
+            },
+            {
+                code: 'QUICK_RATIO',
+                label: 'Quick Ratio',
+                unit: 'x',
+                formula: '((ACTIF_CT - STOCKS) / PASSIF_CT)',
+                category: 'LIQUIDITY',
+                description: 'Liquidite immediate sans les stocks',
+                threshold_warn: new client_1.Prisma.Decimal('1.0'),
+                threshold_critical: new client_1.Prisma.Decimal('0.5'),
+            },
+            {
+                code: 'CASH_RATIO',
+                label: 'Cash Ratio',
+                unit: 'x',
+                formula: 'TRESORERIE / DETTES_CT',
+                category: 'LIQUIDITY',
+                description: 'Tresorerie / Dettes CT',
+                threshold_warn: new client_1.Prisma.Decimal('0.5'),
+                threshold_critical: new client_1.Prisma.Decimal('0.2'),
+            },
+            {
+                code: 'BFR',
+                label: 'Besoin en Fonds de Roulement',
+                unit: 'FCFA',
+                formula: 'CREANCES + STOCKS - DETTES_FOURNISSEURS',
+                category: 'LIQUIDITY',
+                description: 'Creances + Stocks - Dettes fournisseurs',
+                threshold_warn: null,
+                threshold_critical: null,
+            },
+            {
                 code: 'CA',
-                label: "Chiffre d'Affaires",
+                label: "Chiffre d'Affaires Total",
                 unit: 'FCFA',
                 formula: 'SUM(REVENUE)',
+                category: 'PROFITABILITY',
+                description: 'Revenus totaux de la periode',
                 threshold_warn: null,
                 threshold_critical: null,
             },
@@ -345,6 +573,8 @@ let KpisService = KpisService_1 = class KpisService {
                 label: 'EBITDA',
                 unit: 'FCFA',
                 formula: 'CA - OPEX',
+                category: 'PROFITABILITY',
+                description: 'Resultat operationnel avant amortissements',
                 threshold_warn: null,
                 threshold_critical: null,
             },
@@ -353,6 +583,8 @@ let KpisService = KpisService_1 = class KpisService {
                 label: 'Marge EBITDA',
                 unit: '%',
                 formula: '((CA - OPEX) / CA) * 100',
+                category: 'PROFITABILITY',
+                description: 'EBITDA / CA x 100',
                 threshold_warn: new client_1.Prisma.Decimal('10'),
                 threshold_critical: new client_1.Prisma.Decimal('5'),
             },
@@ -361,6 +593,8 @@ let KpisService = KpisService_1 = class KpisService {
                 label: 'Charges totales',
                 unit: 'FCFA',
                 formula: 'SUM(EXPENSE)',
+                category: 'EFFICIENCY',
+                description: 'Somme des charges periodiques',
                 threshold_warn: null,
                 threshold_critical: null,
             },
@@ -369,6 +603,8 @@ let KpisService = KpisService_1 = class KpisService {
                 label: 'Runway Tresorerie',
                 unit: 'semaines',
                 formula: 'Cash / BurnRate',
+                category: 'LIQUIDITY',
+                description: 'Semaines de tresorerie restantes',
                 threshold_warn: new client_1.Prisma.Decimal('8'),
                 threshold_critical: new client_1.Prisma.Decimal('4'),
             },
@@ -381,13 +617,23 @@ let KpisService = KpisService_1 = class KpisService {
                         code: kpi.code,
                     },
                 },
-                update: {},
+                update: {
+                    label: kpi.label,
+                    formula: kpi.formula,
+                    unit: kpi.unit,
+                    category: kpi.category,
+                    description: kpi.description,
+                    threshold_warn: kpi.threshold_warn,
+                    threshold_critical: kpi.threshold_critical,
+                },
                 create: {
                     org_id: orgId,
                     code: kpi.code,
                     label: kpi.label,
                     formula: kpi.formula,
                     unit: kpi.unit,
+                    category: kpi.category,
+                    description: kpi.description,
                     threshold_warn: kpi.threshold_warn,
                     threshold_critical: kpi.threshold_critical,
                     is_active: true,
@@ -396,7 +642,7 @@ let KpisService = KpisService_1 = class KpisService {
         }
     }
     computeKpiSeverity(kpiDef, value) {
-        const lowerIsBetter = kpiDef.code === 'DSO';
+        const lowerIsBetter = ['DSO', 'DPO', 'COST_PER_REVENUE', 'OPEX_RATIO', 'PAYROLL_RATIO'].includes(kpiDef.code);
         if (kpiDef.threshold_critical !== null) {
             if (lowerIsBetter ? value.gt(kpiDef.threshold_critical) : value.lt(kpiDef.threshold_critical)) {
                 return client_1.AlertSeverity.CRITICAL;
@@ -425,10 +671,14 @@ let KpisService = KpisService_1 = class KpisService {
             kpi_id: value.kpi_id,
             kpi_code: value.kpi.code,
             kpi_label: value.kpi.label,
+            category: value.kpi.category,
+            description: value.kpi.description,
             unit: value.kpi.unit,
             period_id: value.period_id,
             scenario_id: value.scenario_id,
             value: value.value.toString(),
+            threshold_warn: value.kpi.threshold_warn?.toString() ?? null,
+            threshold_critical: value.kpi.threshold_critical?.toString() ?? null,
             severity: value.severity,
             calculated_at: value.calculated_at,
         };

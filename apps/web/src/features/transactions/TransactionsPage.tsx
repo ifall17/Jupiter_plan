@@ -380,7 +380,9 @@ function AddTransactionModal({
             padding: '8px 18px',
             borderRadius: 8,
             border: 'none',
-            background: isEditing ? updateMutation.isPending : createMutation.isPending ? 'var(--text-lo)' : 'var(--terra)',
+            background: isEditing
+              ? (updateMutation.isPending ? 'var(--text-lo)' : 'var(--terra)')
+              : (createMutation.isPending ? 'var(--text-lo)' : 'var(--terra)'),
             color: '#fff',
             cursor: 'pointer',
             fontWeight: 600,
