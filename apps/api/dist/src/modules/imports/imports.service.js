@@ -13,12 +13,13 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.ImportsService = exports.MAX_IMPORT_FILE_SIZE_BYTES = void 0;
 const common_1 = require("@nestjs/common");
 const crypto_1 = require("crypto");
-const exceljs_1 = require("exceljs");
+const ExcelJS = require("exceljs");
 const client_1 = require("@prisma/client");
 const enums_1 = require("../../shared/enums");
 const audit_service_1 = require("../../common/services/audit.service");
 const events_gateway_1 = require("../../common/services/events.gateway");
 const prisma_service_1 = require("../../prisma/prisma.service");
+const syscohada_mapping_service_1 = require("../../common/services/syscohada-mapping.service");
 exports.MAX_IMPORT_FILE_SIZE_BYTES = 10 * 1024 * 1024;
 const ALLOWED_IMPORT_MIME_TYPES = new Set([
     'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
@@ -92,7 +93,7 @@ function parseLineType(raw) {
     return null;
 }
 async function readWorkbookRows(buffer) {
-    const workbook = new exceljs_1.default.Workbook();
+    const workbook = new ExcelJS.Workbook();
     await workbook.xlsx.load(buffer);
     const worksheet = workbook.worksheets[0];
     if (!worksheet) {
@@ -144,10 +145,11 @@ function normalizeWorksheetCellValue(value) {
     return String(value);
 }
 let ImportsService = ImportsService_1 = class ImportsService {
-    constructor(prisma, auditService, eventsGateway) {
+    constructor(prisma, auditService, eventsGateway, syscohadaMappingService) {
         this.prisma = prisma;
         this.auditService = auditService;
         this.eventsGateway = eventsGateway;
+        this.syscohadaMappingService = syscohadaMappingService;
         this.logger = new common_1.Logger(ImportsService_1.name);
     }
     async processImport(file, periodId, orgId, createdBy, ipAddress) {
@@ -252,13 +254,18 @@ let ImportsService = ImportsService_1 = class ImportsService {
                     errors.push({ row: rowNumber, error: 'INVALID_AMOUNT', value: String(amountValue ?? '') });
                     continue;
                 }
-                const detectedLineType = parseLineType(lineTypeRaw);
-                if (!detectedLineType) {
+                const lineTypeHint = parseLineType(lineTypeRaw);
+                const resolvedLineTypeStr = await this.syscohadaMappingService.resolveSingleLineType(accountCode, parsedAmount.toString(), orgId);
+                const lineType = resolvedLineTypeStr === 'REVENUE'
+                    ? client_1.LineType.REVENUE
+                    : resolvedLineTypeStr === 'EXPENSE'
+                        ? client_1.LineType.EXPENSE
+                        : lineTypeHint;
+                if (!lineType) {
                     rowsSkipped += 1;
                     errors.push({ row: rowNumber, error: 'INVALID_LINE_TYPE', value: lineTypeRaw });
                     continue;
                 }
-                const lineType = detectedLineType;
                 const absoluteAmount = parsedAmount.abs();
                 const signedAmount = lineType === client_1.LineType.EXPENSE ? absoluteAmount.negated() : absoluteAmount;
                 const transactionDate = transactionDateRaw instanceof Date ? transactionDateRaw : new Date(String(transactionDateRaw));
@@ -398,6 +405,7 @@ exports.ImportsService = ImportsService = ImportsService_1 = __decorate([
     (0, common_1.Injectable)(),
     __metadata("design:paramtypes", [prisma_service_1.PrismaService,
         audit_service_1.AuditService,
-        events_gateway_1.EventsGateway])
+        events_gateway_1.EventsGateway,
+        syscohada_mapping_service_1.SyscohadaMappingService])
 ], ImportsService);
 //# sourceMappingURL=imports.service.js.map

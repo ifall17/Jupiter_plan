@@ -17,6 +17,7 @@
     "test:e2e:watch": "jest --config test/e2e/jest.e2e.config.ts --watch",
     "test:all": "npm run test && npm run test:integration && npm run test:e2e",
     "seed": "ts-node prisma/seed.ts",
+    "seed:syscohada:detailed": "ts-node prisma/seed-syscohada-detailed.ts",
     "db:reset": "prisma migrate reset --force && npm run seed"
   },
   "dependencies": {

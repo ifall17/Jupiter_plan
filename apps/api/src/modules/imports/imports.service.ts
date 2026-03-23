@@ -1,11 +1,12 @@
 import { BadRequestException, Injectable, Logger, NotFoundException, UnauthorizedException } from '@nestjs/common';
 import { randomUUID } from 'crypto';
-import ExcelJS from 'exceljs';
+import ExcelJS = require('exceljs');
 import { ImportSource, ImportStatus, LineType, Prisma, UserRole } from '@prisma/client';
 import { AuditAction } from '@shared/enums';
 import { AuditService } from '../../common/services/audit.service';
 import { EventsGateway } from '../../common/services/events.gateway';
 import { PrismaService } from '../../prisma/prisma.service';
+import { SyscohadaMappingService } from '../../common/services/syscohada-mapping.service';
 
 export interface ImportsCurrentUser {
   sub: string;
@@ -185,6 +186,7 @@ export class ImportsService {
     private readonly prisma: PrismaService,
     private readonly auditService: AuditService,
     private readonly eventsGateway: EventsGateway,
+    private readonly syscohadaMappingService: SyscohadaMappingService,
   ) {}
 
   async processImport(
@@ -311,14 +313,27 @@ export class ImportsService {
           continue;
         }
 
-        const detectedLineType = parseLineType(lineTypeRaw);
-        if (!detectedLineType) {
+        // Resolve line_type from SYSCOHADA mapping (database priority)
+        // Keep user-input parsing as hint but prefer DB resolution
+        const lineTypeHint = parseLineType(lineTypeRaw);
+        const resolvedLineTypeStr = await this.syscohadaMappingService.resolveSingleLineType(
+          accountCode,
+          parsedAmount.toString(),
+          orgId,
+        );
+        const lineType =
+          resolvedLineTypeStr === 'REVENUE'
+            ? LineType.REVENUE
+            : resolvedLineTypeStr === 'EXPENSE'
+              ? LineType.EXPENSE
+              : lineTypeHint; // fallback to parsed hint if resolved to OTHER
+
+        if (!lineType) {
           rowsSkipped += 1;
           errors.push({ row: rowNumber, error: 'INVALID_LINE_TYPE', value: lineTypeRaw });
           continue;
         }
 
-        const lineType = detectedLineType;
         const absoluteAmount = parsedAmount.abs();
         const signedAmount = lineType === LineType.EXPENSE ? absoluteAmount.negated() : absoluteAmount;
         const transactionDate = transactionDateRaw instanceof Date ? transactionDateRaw : new Date(String(transactionDateRaw));

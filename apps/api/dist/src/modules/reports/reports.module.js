@@ -9,6 +9,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.ReportsModule = void 0;
 const common_1 = require("@nestjs/common");
 const axios_1 = require("@nestjs/axios");
+const syscohada_mapping_service_1 = require("../../common/services/syscohada-mapping.service");
 const prisma_service_1 = require("../../prisma/prisma.service");
 const reports_controller_1 = require("./reports.controller");
 const reports_service_1 = require("./reports.service");
@@ -19,7 +20,7 @@ exports.ReportsModule = ReportsModule = __decorate([
     (0, common_1.Module)({
         imports: [axios_1.HttpModule],
         controllers: [reports_controller_1.ReportsController],
-        providers: [reports_service_1.ReportsService, prisma_service_1.PrismaService],
+        providers: [reports_service_1.ReportsService, prisma_service_1.PrismaService, syscohada_mapping_service_1.SyscohadaMappingService],
     })
 ], ReportsModule);
 //# sourceMappingURL=reports.module.js.map

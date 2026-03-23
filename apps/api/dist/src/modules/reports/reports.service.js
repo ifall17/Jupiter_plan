@@ -15,12 +15,14 @@ const axios_1 = require("@nestjs/axios");
 const config_1 = require("@nestjs/config");
 const client_1 = require("@prisma/client");
 const rxjs_1 = require("rxjs");
+const syscohada_mapping_service_1 = require("../../common/services/syscohada-mapping.service");
 const prisma_service_1 = require("../../prisma/prisma.service");
 let ReportsService = class ReportsService {
-    constructor(prisma, httpService, config) {
+    constructor(prisma, httpService, config, syscohadaMappingService) {
         this.prisma = prisma;
         this.httpService = httpService;
         this.config = config;
+        this.syscohadaMappingService = syscohadaMappingService;
     }
     async generate(dto, orgId) {
         const data = await this.getReportData(dto, orgId);
@@ -34,6 +36,7 @@ let ReportsService = class ReportsService {
                 report_type: dto.report_type,
                 format: dto.format,
                 org_name: data.orgName,
+                snapshot: data.snapshot,
                 transactions: data.transactions,
                 cash_flow_plans: data.cashFlowPlans,
                 kpis: data.kpis,
@@ -133,6 +136,7 @@ let ReportsService = class ReportsService {
                 where: {
                     org_id: orgId,
                     period_id: { in: periodIds },
+                    is_validated: true,
                 },
                 select: {
                     account_code: true,
@@ -164,6 +168,34 @@ let ReportsService = class ReportsService {
                 include: { kpi: true },
             }),
         ]);
+        const latestSelectedPeriod = periodIds.length
+            ? await this.prisma.period.findFirst({
+                where: { org_id: orgId, id: { in: periodIds } },
+                orderBy: [
+                    { fiscal_year: { start_date: 'desc' } },
+                    { period_number: 'desc' },
+                ],
+                select: { id: true },
+            })
+            : null;
+        const latestSnapshot = latestSelectedPeriod
+            ? await this.prisma.financialSnapshot.findFirst({
+                where: {
+                    org_id: orgId,
+                    period_id: latestSelectedPeriod.id,
+                    scenario_id: null,
+                },
+                orderBy: { calculated_at: 'desc' },
+                select: {
+                    is_revenue: true,
+                    is_expenses: true,
+                    is_net: true,
+                    bs_assets: true,
+                    bs_liabilities: true,
+                    bs_equity: true,
+                },
+            })
+            : null;
         let periodLabel = 'Periode selectionnee';
         if (dto.period_id) {
             const period = await this.prisma.period.findUnique({ where: { id: dto.period_id }, select: { label: true } });
@@ -187,14 +219,23 @@ let ReportsService = class ReportsService {
                 periodLabel = `Plage ${from.label} -> ${to.label}`;
             }
         }
+        const resolvedLineTypes = await this.syscohadaMappingService.resolveReportLineTypes(orgId, transactions.map((t) => ({ accountCode: t.account_code, amount: t.amount.toString() })));
         return {
             orgName: org?.name ?? 'Organisation',
             periodLabel,
-            transactions: transactions.map((t) => ({
+            snapshot: {
+                is_revenue: latestSnapshot?.is_revenue.toString() ?? '0',
+                is_expenses: latestSnapshot?.is_expenses.toString() ?? '0',
+                is_net: latestSnapshot?.is_net.toString() ?? '0',
+                bs_assets: latestSnapshot?.bs_assets.toString() ?? '0',
+                bs_liabilities: latestSnapshot?.bs_liabilities.toString() ?? '0',
+                bs_equity: latestSnapshot?.bs_equity.toString() ?? '0',
+            },
+            transactions: transactions.map((t, index) => ({
                 account_code: t.account_code,
                 account_label: t.account_label,
                 department: t.department,
-                line_type: t.account_code.startsWith('7') || t.amount.gte(0) ? 'REVENUE' : 'EXPENSE',
+                line_type: resolvedLineTypes[index],
                 amount: t.amount.toString(),
                 transaction_date: (t.period?.start_date ?? new Date()).toISOString(),
                 is_validated: t.is_validated,
@@ -223,6 +264,7 @@ exports.ReportsService = ReportsService = __decorate([
     (0, common_1.Injectable)(),
     __metadata("design:paramtypes", [prisma_service_1.PrismaService,
         axios_1.HttpService,
-        config_1.ConfigService])
+        config_1.ConfigService,
+        syscohada_mapping_service_1.SyscohadaMappingService])
 ], ReportsService);
 //# sourceMappingURL=reports.service.js.map

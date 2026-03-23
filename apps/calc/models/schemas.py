@@ -37,6 +37,8 @@ class ScenarioRequest(BaseModel):
 class ClosePeriodRequest(BaseModel):
     org_id: UUID
     period_id: UUID
+    financial_values: dict[str, Decimal] = Field(default_factory=dict)
+    has_pending_transactions: bool = False
 
 
 class ImportProcessRequest(BaseModel):

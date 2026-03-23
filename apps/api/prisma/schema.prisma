@@ -45,6 +45,41 @@ enum LineType {
   CAPEX
 }
 
+enum FinancialStatement {
+  BALANCE_SHEET
+  INCOME_STATEMENT
+  CASH_FLOW
+  OFF_BALANCE
+}
+
+enum FinancialSection {
+  ASSET
+  LIABILITY
+  EQUITY
+  REVENUE
+  EXPENSE
+  OPERATING
+  INVESTING
+  FINANCING
+  OFF_BALANCE
+}
+
+enum NormalBalance {
+  DEBIT
+  CREDIT
+  MIXED
+}
+
+enum MappingPresentationRule {
+  FIXED_ASSET
+  FIXED_LIABILITY
+  FIXED_EQUITY
+  INCOME_REVENUE
+  INCOME_EXPENSE
+  DYNAMIC_BY_BALANCE_SIGN
+  MEMO_ONLY
+}
+
 enum ScenarioType {
   OPTIMISTE
   BASE
@@ -152,6 +187,7 @@ model Organization {
   kpi_values           KpiValue[]
   alerts               Alert[]
   comments             Comment[]
+  syscohada_account_mappings SyscohadaAccountMapping[]
 
   @@map("organizations")
 }
@@ -374,6 +410,32 @@ model Transaction {
   @@index([org_id])
   @@index([org_id, period_id])
   @@map("transactions")
+}
+
+model SyscohadaAccountMapping {
+  id                String                   @id @default(uuid())
+  org_id            String?
+  prefix            String                   @db.VarChar(8)
+  prefix_length     Int
+  label             String
+  account_class     Int
+  statement         FinancialStatement
+  section           FinancialSection
+  subsection        String?                  @db.VarChar(120)
+  normal_balance    NormalBalance
+  presentation_rule MappingPresentationRule
+  line_type_hint    LineType?
+  cash_flow_section FinancialSection?
+  is_system         Boolean                  @default(true)
+  is_active         Boolean                  @default(true)
+  created_at        DateTime                 @default(now())
+  updated_at        DateTime                 @updatedAt
+  organization      Organization?            @relation(fields: [org_id], references: [id])
+
+  @@index([org_id, is_active])
+  @@index([prefix_length, prefix])
+  @@unique([org_id, prefix, statement, section])
+  @@map("syscohada_account_mappings")
 }
 
 model ImportJob {

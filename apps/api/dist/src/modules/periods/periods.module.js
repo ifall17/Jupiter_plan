@@ -8,6 +8,8 @@ var __decorate = (this && this.__decorate) || function (decorators, target, key,
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.PeriodsModule = void 0;
 const common_1 = require("@nestjs/common");
+const calc_engine_client_1 = require("../../common/services/calc-engine.client");
+const syscohada_mapping_service_1 = require("../../common/services/syscohada-mapping.service");
 const prisma_service_1 = require("../../prisma/prisma.service");
 const periods_controller_1 = require("./periods.controller");
 const periods_service_1 = require("./periods.service");
@@ -17,7 +19,7 @@ exports.PeriodsModule = PeriodsModule;
 exports.PeriodsModule = PeriodsModule = __decorate([
     (0, common_1.Module)({
         controllers: [periods_controller_1.PeriodsController],
-        providers: [periods_service_1.PeriodsService, prisma_service_1.PrismaService],
+        providers: [periods_service_1.PeriodsService, prisma_service_1.PrismaService, calc_engine_client_1.CalcEngineClient, syscohada_mapping_service_1.SyscohadaMappingService],
     })
 ], PeriodsModule);
 //# sourceMappingURL=periods.module.js.map

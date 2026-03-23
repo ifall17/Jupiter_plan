@@ -1,6 +1,6 @@
 import { INestApplication, CanActivate, ExecutionContext } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
-import ExcelJS from 'exceljs';
+import ExcelJS = require('exceljs');
 import * as request from 'supertest';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { OrgGuard } from '../../common/guards/org.guard';

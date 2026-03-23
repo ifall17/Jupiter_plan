@@ -5,6 +5,7 @@ import { CreateTransactionDto } from './dto/create-transaction.dto';
 import { UpdateTransactionDto } from './dto/update-transaction.dto';
 import { TransactionResponseDto } from './dto/transaction-response.dto';
 import { LineType, PeriodStatus, Prisma, UserRole } from '@prisma/client';
+import { SyscohadaMappingService } from '../../common/services/syscohada-mapping.service';
 
 export interface TransactionsCurrentUser {
   sub: string;
@@ -14,7 +15,10 @@ export interface TransactionsCurrentUser {
 
 @Injectable()
 export class TransactionsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly syscohadaMappingService: SyscohadaMappingService,
+  ) {}
 
   async list(params: {
     currentUser: TransactionsCurrentUser;
@@ -166,8 +170,22 @@ export class TransactionsService {
       throw new BadRequestException('Amount must be positive');
     }
 
-    const signedAmount =
-      dto.line_type === LineType.EXPENSE ? amount.abs().negated() : amount.abs();
+    // Resolve line_type from SYSCOHADA mapping (database priority)
+    const resolvedLineType = await this.syscohadaMappingService.resolveSingleLineType(
+      dto.account_code,
+      dto.amount,
+      currentUser.org_id,
+    );
+
+    // Map resolved line_type back to enum
+    const finalLineType =
+      resolvedLineType === 'REVENUE'
+        ? LineType.REVENUE
+        : resolvedLineType === 'EXPENSE'
+          ? LineType.EXPENSE
+          : dto.line_type; // fallback to user-provided if resolved to OTHER
+
+    const signedAmount = finalLineType === LineType.EXPENSE ? amount.abs().negated() : amount.abs();
 
     const transaction = await this.prisma.transaction.create({
       data: {
@@ -229,30 +247,48 @@ export class TransactionsService {
       await this.ensurePeriodBelongsToOrg(dto.period_id, currentUser.org_id);
     }
 
-    // Parse and validate amount if provided
+    const effectiveAccountCode = dto.account_code ? dto.account_code.trim() : transaction.account_code;
+    const shouldRecomputeSignedAmount = Boolean(dto.amount || dto.account_code || dto.line_type);
+
     let signedAmount = transaction.amount;
-    if (dto.amount) {
-      let amount: Prisma.Decimal;
-      try {
-        amount = new Prisma.Decimal(dto.amount);
-      } catch {
-        throw new BadRequestException('Amount must be positive');
+    if (shouldRecomputeSignedAmount) {
+      let absoluteAmount: Prisma.Decimal;
+      if (dto.amount) {
+        try {
+          absoluteAmount = new Prisma.Decimal(dto.amount);
+        } catch {
+          throw new BadRequestException('Amount must be positive');
+        }
+
+        if (absoluteAmount.lte(new Prisma.Decimal('0'))) {
+          throw new BadRequestException('Amount must be positive');
+        }
+      } else {
+        absoluteAmount = transaction.amount.abs();
       }
 
-      if (amount.lte(new Prisma.Decimal('0'))) {
-        throw new BadRequestException('Amount must be positive');
-      }
+      const fallbackLineType = dto.line_type ?? this.getLineTypeFromAmount(transaction.amount);
+      const resolvedLineType = await this.syscohadaMappingService.resolveSingleLineType(
+        effectiveAccountCode,
+        absoluteAmount.toString(),
+        currentUser.org_id,
+      );
+      const finalLineType =
+        resolvedLineType === 'REVENUE'
+          ? LineType.REVENUE
+          : resolvedLineType === 'EXPENSE'
+            ? LineType.EXPENSE
+            : fallbackLineType;
 
-      const lineType = dto.line_type ?? this.getLineTypeFromAmount(transaction.amount);
       signedAmount =
-        lineType === LineType.EXPENSE ? amount.abs().negated() : amount.abs();
+        finalLineType === LineType.EXPENSE ? absoluteAmount.abs().negated() : absoluteAmount.abs();
     }
 
     const updated = await this.prisma.transaction.update({
       where: { id },
       data: {
         period_id: dto.period_id ?? transaction.period_id,
-        account_code: dto.account_code ? dto.account_code.trim() : transaction.account_code,
+        account_code: effectiveAccountCode,
         account_label: dto.label ? dto.label.trim() : transaction.account_label,
         department: dto.department ?? transaction.department,
         amount: signedAmount,

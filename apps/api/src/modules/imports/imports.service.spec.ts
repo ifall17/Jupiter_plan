@@ -1,9 +1,10 @@
 import { BadRequestException, UnauthorizedException } from '@nestjs/common';
 import { ImportStatus, LineType, Prisma } from '@prisma/client';
 import { AuditAction } from '@shared/enums';
-import ExcelJS from 'exceljs';
+import ExcelJS = require('exceljs');
 import { AuditService } from '../../common/services/audit.service';
 import { EventsGateway } from '../../common/services/events.gateway';
+import { SyscohadaMappingService } from '../../common/services/syscohada-mapping.service';
 import { ImportsService } from './imports.service';
 
 async function buildWorkbookBuffer(rows: Array<Array<string>>): Promise<Buffer> {
@@ -27,6 +28,7 @@ describe('ImportsService', () => {
   };
   let auditService: jest.Mocked<AuditService>;
   let eventsGateway: { emitToOrg: jest.Mock };
+  let syscohadaMappingService: jest.Mocked<SyscohadaMappingService>;
 
   beforeEach(() => {
     prisma = {
@@ -43,7 +45,17 @@ describe('ImportsService', () => {
       emitToOrg: jest.fn(),
     };
 
-    service = new ImportsService(prisma as never, auditService, eventsGateway as unknown as EventsGateway);
+    syscohadaMappingService = {
+      resolveSingleLineType: jest.fn(),
+      resolveReportLineTypes: jest.fn(),
+    } as unknown as jest.Mocked<SyscohadaMappingService>;
+
+    service = new ImportsService(
+      prisma as never,
+      auditService,
+      eventsGateway as unknown as EventsGateway,
+      syscohadaMappingService,
+    );
   });
 
   it('should reject invalid MIME types with a coded error', async () => {
@@ -91,6 +103,8 @@ describe('ImportsService', () => {
         error_report: null,
       });
     prisma.transaction.createMany.mockResolvedValue({ count: 1 });
+    // Mock SYSCOHADA mapping to return EXPENSE for 601000 (purchasing account)
+    syscohadaMappingService.resolveSingleLineType.mockResolvedValue('EXPENSE');
 
     await service.processImport(file, 'period-1', 'org-1', 'user-1', '127.0.0.1');
 

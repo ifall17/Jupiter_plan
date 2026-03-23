@@ -3,6 +3,7 @@ import { HttpService } from '@nestjs/axios';
 import { ConfigService } from '@nestjs/config';
 import { PeriodStatus } from '@prisma/client';
 import { firstValueFrom } from 'rxjs';
+import { SyscohadaMappingService } from '../../common/services/syscohada-mapping.service';
 import { PrismaService } from '../../prisma/prisma.service';
 import { GenerateReportDto } from './dto/generate-report.dto';
 
@@ -14,11 +15,19 @@ export interface ReportsCurrentUser {
 type ReportPayloadData = {
   orgName: string;
   periodLabel: string;
+  snapshot: {
+    is_revenue: string;
+    is_expenses: string;
+    is_net: string;
+    bs_assets: string;
+    bs_liabilities: string;
+    bs_equity: string;
+  };
   transactions: Array<{
     account_code: string;
     account_label: string;
     department: string;
-    line_type: 'REVENUE' | 'EXPENSE';
+    line_type: 'REVENUE' | 'EXPENSE' | 'OTHER';
     amount: string;
     transaction_date: string;
     is_validated: boolean;
@@ -47,6 +56,7 @@ export class ReportsService {
     private readonly prisma: PrismaService,
     private readonly httpService: HttpService,
     private readonly config: ConfigService,
+    private readonly syscohadaMappingService: SyscohadaMappingService,
   ) {}
 
   async generate(
@@ -67,6 +77,7 @@ export class ReportsService {
             report_type: dto.report_type,
             format: dto.format,
             org_name: data.orgName,
+            snapshot: data.snapshot,
             transactions: data.transactions,
             cash_flow_plans: data.cashFlowPlans,
             kpis: data.kpis,
@@ -189,6 +200,7 @@ export class ReportsService {
         where: {
           org_id: orgId,
           period_id: { in: periodIds },
+          is_validated: true,
         },
         select: {
           account_code: true,
@@ -221,6 +233,36 @@ export class ReportsService {
       }),
     ]);
 
+    const latestSelectedPeriod = periodIds.length
+      ? await this.prisma.period.findFirst({
+          where: { org_id: orgId, id: { in: periodIds } },
+          orderBy: [
+            { fiscal_year: { start_date: 'desc' } },
+            { period_number: 'desc' },
+          ],
+          select: { id: true },
+        })
+      : null;
+
+    const latestSnapshot = latestSelectedPeriod
+      ? await this.prisma.financialSnapshot.findFirst({
+          where: {
+            org_id: orgId,
+            period_id: latestSelectedPeriod.id,
+            scenario_id: null,
+          },
+          orderBy: { calculated_at: 'desc' },
+          select: {
+            is_revenue: true,
+            is_expenses: true,
+            is_net: true,
+            bs_assets: true,
+            bs_liabilities: true,
+            bs_equity: true,
+          },
+        })
+      : null;
+
     let periodLabel = 'Periode selectionnee';
     if (dto.period_id) {
       const period = await this.prisma.period.findUnique({ where: { id: dto.period_id }, select: { label: true } });
@@ -242,14 +284,27 @@ export class ReportsService {
       }
     }
 
+    const resolvedLineTypes = await this.syscohadaMappingService.resolveReportLineTypes(
+      orgId,
+      transactions.map((t) => ({ accountCode: t.account_code, amount: t.amount.toString() })),
+    );
+
     return {
       orgName: org?.name ?? 'Organisation',
       periodLabel,
-      transactions: transactions.map((t) => ({
+      snapshot: {
+        is_revenue: latestSnapshot?.is_revenue.toString() ?? '0',
+        is_expenses: latestSnapshot?.is_expenses.toString() ?? '0',
+        is_net: latestSnapshot?.is_net.toString() ?? '0',
+        bs_assets: latestSnapshot?.bs_assets.toString() ?? '0',
+        bs_liabilities: latestSnapshot?.bs_liabilities.toString() ?? '0',
+        bs_equity: latestSnapshot?.bs_equity.toString() ?? '0',
+      },
+      transactions: transactions.map((t, index) => ({
         account_code: t.account_code,
         account_label: t.account_label,
         department: t.department,
-        line_type: t.account_code.startsWith('7') || t.amount.gte(0) ? 'REVENUE' : 'EXPENSE',
+        line_type: resolvedLineTypes[index],
         amount: t.amount.toString(),
         transaction_date: (t.period?.start_date ?? new Date()).toISOString(),
         is_validated: t.is_validated,

@@ -54,6 +54,7 @@ class GenerateReportRequest(BaseModel):
     report_type: str
     format: str
     org_name: str
+    snapshot: Optional[dict] = None
     transactions: List[Transaction]
     cash_flow_plans: List[CashFlowPlan]
     kpis: List[KpiValue]
@@ -208,9 +209,13 @@ def _fill_flux_tresorerie(ws: Worksheet, req: GenerateReportRequest):
 
 
 def _fill_bilan(ws: Worksheet, req: GenerateReportRequest):
-    revenues = sum(Decimal(t.amount) for t in req.transactions if t.line_type == "REVENUE")
-    expenses = sum(Decimal(t.amount) for t in req.transactions if t.line_type == "EXPENSE")
-    result_net = revenues - expenses
+        snapshot = req.snapshot or {}
+        if snapshot.get("is_net") is not None:
+            result_net = Decimal(str(snapshot.get("is_net", "0")))
+        else:
+            revenues = sum(Decimal(t.amount) for t in req.transactions if t.line_type == "REVENUE")
+            expenses = sum(Decimal(t.amount) for t in req.transactions if t.line_type == "EXPENSE")
+            result_net = revenues - expenses
 
     for row in ws.iter_rows():
         ref = row[0].value

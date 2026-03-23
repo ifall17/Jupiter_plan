@@ -1,10 +1,6 @@
-"""
-Tests de validation SYSCOHADA.
-"""
-
 import pytest
 
-from utils.syscohada import get_line_type, is_valid_syscohada
+from utils.syscohada import get_financial_statement, get_line_type, is_valid_syscohada, resolve_account_mapping
 
 
 class TestSYSCOHADAValidation:
@@ -41,3 +37,17 @@ class TestSYSCOHADAValidation:
         assert get_line_type('521000') == 'OTHER'
         assert get_line_type('411000') == 'OTHER'
         assert get_line_type('101000') == 'OTHER'
+
+    def test_should_resolve_balance_sheet_mapping(self):
+        mapping = resolve_account_mapping('521000')
+        assert mapping is not None
+        assert mapping.statement == 'BALANCE_SHEET'
+        assert mapping.section == 'ASSET'
+        assert mapping.subsection == 'asset_bank_accounts'
+
+    def test_should_resolve_income_statement_mapping(self):
+        mapping = resolve_account_mapping('681000')
+        assert mapping is not None
+        assert mapping.statement == 'INCOME_STATEMENT'
+        assert mapping.section == 'EXPENSE'
+        assert get_financial_statement('681000') == 'INCOME_STATEMENT'

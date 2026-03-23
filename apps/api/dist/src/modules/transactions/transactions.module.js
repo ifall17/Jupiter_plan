@@ -11,13 +11,14 @@ const common_1 = require("@nestjs/common");
 const prisma_service_1 = require("../../prisma/prisma.service");
 const transactions_controller_1 = require("./transactions.controller");
 const transactions_service_1 = require("./transactions.service");
+const syscohada_mapping_service_1 = require("../../common/services/syscohada-mapping.service");
 let TransactionsModule = class TransactionsModule {
 };
 exports.TransactionsModule = TransactionsModule;
 exports.TransactionsModule = TransactionsModule = __decorate([
     (0, common_1.Module)({
         controllers: [transactions_controller_1.TransactionsController],
-        providers: [transactions_service_1.TransactionsService, prisma_service_1.PrismaService],
+        providers: [transactions_service_1.TransactionsService, prisma_service_1.PrismaService, syscohada_mapping_service_1.SyscohadaMappingService],
         exports: [transactions_service_1.TransactionsService],
     })
 ], TransactionsModule);

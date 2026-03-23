@@ -13,9 +13,11 @@ exports.TransactionsService = void 0;
 const common_1 = require("@nestjs/common");
 const prisma_service_1 = require("../../prisma/prisma.service");
 const client_1 = require("@prisma/client");
+const syscohada_mapping_service_1 = require("../../common/services/syscohada-mapping.service");
 let TransactionsService = class TransactionsService {
-    constructor(prisma) {
+    constructor(prisma, syscohadaMappingService) {
         this.prisma = prisma;
+        this.syscohadaMappingService = syscohadaMappingService;
     }
     async list(params) {
         const page = params.page && params.page > 0 ? params.page : 1;
@@ -131,7 +133,13 @@ let TransactionsService = class TransactionsService {
         if (amount.lte(new client_1.Prisma.Decimal('0'))) {
             throw new common_1.BadRequestException('Amount must be positive');
         }
-        const signedAmount = dto.line_type === client_1.LineType.EXPENSE ? amount.abs().negated() : amount.abs();
+        const resolvedLineType = await this.syscohadaMappingService.resolveSingleLineType(dto.account_code, dto.amount, currentUser.org_id);
+        const finalLineType = resolvedLineType === 'REVENUE'
+            ? client_1.LineType.REVENUE
+            : resolvedLineType === 'EXPENSE'
+                ? client_1.LineType.EXPENSE
+                : dto.line_type;
+        const signedAmount = finalLineType === client_1.LineType.EXPENSE ? amount.abs().negated() : amount.abs();
         const transaction = await this.prisma.transaction.create({
             data: {
                 org_id: currentUser.org_id,
@@ -172,27 +180,40 @@ let TransactionsService = class TransactionsService {
         if (dto.period_id && dto.period_id !== transaction.period_id) {
             await this.ensurePeriodBelongsToOrg(dto.period_id, currentUser.org_id);
         }
+        const effectiveAccountCode = dto.account_code ? dto.account_code.trim() : transaction.account_code;
+        const shouldRecomputeSignedAmount = Boolean(dto.amount || dto.account_code || dto.line_type);
         let signedAmount = transaction.amount;
-        if (dto.amount) {
-            let amount;
-            try {
-                amount = new client_1.Prisma.Decimal(dto.amount);
+        if (shouldRecomputeSignedAmount) {
+            let absoluteAmount;
+            if (dto.amount) {
+                try {
+                    absoluteAmount = new client_1.Prisma.Decimal(dto.amount);
+                }
+                catch {
+                    throw new common_1.BadRequestException('Amount must be positive');
+                }
+                if (absoluteAmount.lte(new client_1.Prisma.Decimal('0'))) {
+                    throw new common_1.BadRequestException('Amount must be positive');
+                }
             }
-            catch {
-                throw new common_1.BadRequestException('Amount must be positive');
+            else {
+                absoluteAmount = transaction.amount.abs();
             }
-            if (amount.lte(new client_1.Prisma.Decimal('0'))) {
-                throw new common_1.BadRequestException('Amount must be positive');
-            }
-            const lineType = dto.line_type ?? this.getLineTypeFromAmount(transaction.amount);
+            const fallbackLineType = dto.line_type ?? this.getLineTypeFromAmount(transaction.amount);
+            const resolvedLineType = await this.syscohadaMappingService.resolveSingleLineType(effectiveAccountCode, absoluteAmount.toString(), currentUser.org_id);
+            const finalLineType = resolvedLineType === 'REVENUE'
+                ? client_1.LineType.REVENUE
+                : resolvedLineType === 'EXPENSE'
+                    ? client_1.LineType.EXPENSE
+                    : fallbackLineType;
             signedAmount =
-                lineType === client_1.LineType.EXPENSE ? amount.abs().negated() : amount.abs();
+                finalLineType === client_1.LineType.EXPENSE ? absoluteAmount.abs().negated() : absoluteAmount.abs();
         }
         const updated = await this.prisma.transaction.update({
             where: { id },
             data: {
                 period_id: dto.period_id ?? transaction.period_id,
-                account_code: dto.account_code ? dto.account_code.trim() : transaction.account_code,
+                account_code: effectiveAccountCode,
                 account_label: dto.label ? dto.label.trim() : transaction.account_label,
                 department: dto.department ?? transaction.department,
                 amount: signedAmount,
@@ -298,6 +319,7 @@ let TransactionsService = class TransactionsService {
 exports.TransactionsService = TransactionsService;
 exports.TransactionsService = TransactionsService = __decorate([
     (0, common_1.Injectable)(),
-    __metadata("design:paramtypes", [prisma_service_1.PrismaService])
+    __metadata("design:paramtypes", [prisma_service_1.PrismaService,
+        syscohada_mapping_service_1.SyscohadaMappingService])
 ], TransactionsService);
 //# sourceMappingURL=transactions.service.js.map

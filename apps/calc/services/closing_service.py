@@ -22,7 +22,7 @@ class ClosingService:
         period_id: str,
         has_pending_transactions: bool,
         financial_values: dict,
-    ) -> dict[str, str]:
+    ) -> dict:
         started = time.perf_counter()
 
         if has_pending_transactions:
@@ -37,4 +37,19 @@ class ClosingService:
         if not snapshot:
             raise BalanceMismatchError("BALANCE_MISMATCH")
 
-        return {"status": "CLOSED", "period_id": period_id}
+        return {
+            "status": "CLOSED",
+            "period_id": period_id,
+            "snapshot": {
+                "is_revenue": str(snapshot["is_revenue"]),
+                "is_expenses": str(snapshot["is_expenses"]),
+                "is_ebitda": str(snapshot["is_ebitda"]),
+                "is_net": str(snapshot["is_net"]),
+                "bs_assets": str(snapshot["bs_assets"]),
+                "bs_liabilities": str(snapshot["bs_liabilities"]),
+                "bs_equity": str(snapshot["bs_equity"]),
+                "cf_operating": str(snapshot["cf_operating"]),
+                "cf_investing": str(snapshot["cf_investing"]),
+                "cf_financing": str(snapshot["cf_financing"]),
+            },
+        }
