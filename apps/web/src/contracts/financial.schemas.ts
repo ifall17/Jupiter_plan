@@ -1,6 +1,11 @@
 import { z } from 'zod';
 
-const decimalStringSchema = z.string().regex(/^-?\d+(\.\d+)?$/, 'Expected decimal string');
+const decimalStringSchema = z
+  .union([
+    z.string().regex(/^-?\d+(\.\d+)?$/, 'Expected decimal string'),
+    z.number().finite(),
+  ])
+  .transform((value) => String(value));
 
 export const dashboardVarianceItemSchema = z.object({
   line_label: z.string(),

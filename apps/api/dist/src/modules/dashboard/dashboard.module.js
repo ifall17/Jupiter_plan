@@ -7,7 +7,10 @@ var __decorate = (this && this.__decorate) || function (decorators, target, key,
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.DashboardModule = void 0;
+const axios_1 = require("@nestjs/axios");
 const common_1 = require("@nestjs/common");
+const config_1 = require("@nestjs/config");
+const syscohada_mapping_service_1 = require("../../common/services/syscohada-mapping.service");
 const dashboard_controller_1 = require("./dashboard.controller");
 const dashboard_service_1 = require("./dashboard.service");
 const prisma_service_1 = require("../../prisma/prisma.service");
@@ -16,6 +19,7 @@ let DashboardModule = class DashboardModule {
 exports.DashboardModule = DashboardModule;
 exports.DashboardModule = DashboardModule = __decorate([
     (0, common_1.Module)({
+        imports: [axios_1.HttpModule, config_1.ConfigModule],
         controllers: [dashboard_controller_1.DashboardController],
         providers: [
             dashboard_service_1.DashboardService,
@@ -23,6 +27,7 @@ exports.DashboardModule = DashboardModule = __decorate([
             dashboard_service_1.AlertsRepository,
             dashboard_service_1.SnapshotsRepository,
             prisma_service_1.PrismaService,
+            syscohada_mapping_service_1.SyscohadaMappingService,
         ],
         exports: [dashboard_service_1.DashboardService],
     })

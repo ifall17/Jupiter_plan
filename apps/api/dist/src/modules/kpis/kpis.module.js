@@ -8,6 +8,7 @@ var __decorate = (this && this.__decorate) || function (decorators, target, key,
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.KpisModule = void 0;
 const common_1 = require("@nestjs/common");
+const calc_engine_client_1 = require("../../common/services/calc-engine.client");
 const kpis_controller_1 = require("./kpis.controller");
 const kpis_service_1 = require("./kpis.service");
 const prisma_service_1 = require("../../prisma/prisma.service");
@@ -17,7 +18,7 @@ exports.KpisModule = KpisModule;
 exports.KpisModule = KpisModule = __decorate([
     (0, common_1.Module)({
         controllers: [kpis_controller_1.KpisController],
-        providers: [kpis_service_1.KpisService, prisma_service_1.PrismaService],
+        providers: [kpis_service_1.KpisService, prisma_service_1.PrismaService, calc_engine_client_1.CalcEngineClient],
         exports: [kpis_service_1.KpisService],
     })
 ], KpisModule);

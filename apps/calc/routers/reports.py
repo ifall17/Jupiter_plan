@@ -15,6 +15,13 @@ from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Font, PatternFill
 from openpyxl.worksheet.worksheet import Worksheet
 from pydantic import BaseModel
+from utils.syscohada_mapping import (
+    BILAN_ACTIF_MAPPING,
+    BILAN_PASSIF_MAPPING,
+    CR_AGGREGATS,
+    CR_MAPPING,
+    compute_financial_statements,
+)
 
 router = APIRouter(prefix="/reports", tags=["reports"])
 logger = logging.getLogger(__name__)
@@ -61,6 +68,12 @@ class GenerateReportRequest(BaseModel):
     period_label: str
 
 
+class FinancialStatementsRequest(BaseModel):
+    transactions: List[Transaction]
+    cash_flow_plans: List[CashFlowPlan]
+    snapshot: Optional[dict] = None
+
+
 @router.post("/generate")
 async def generate_report(req: GenerateReportRequest):
     logger.info(
@@ -70,15 +83,66 @@ async def generate_report(req: GenerateReportRequest):
         req.org_name,
     )
 
+    fs = compute_financial_statements(
+        transactions=[
+            {
+                "account_code": t.account_code,
+                "amount": t.amount,
+                "line_type": t.line_type,
+            }
+            for t in req.transactions
+        ],
+        cash_flow_plans=[
+            {
+                "direction": p.direction,
+                "amount": p.amount,
+                "flow_type": p.flow_type,
+            }
+            for p in req.cash_flow_plans
+        ],
+        previous_balances=req.snapshot or {},
+    )
+
+    _req_enriched = {
+        **req.dict(),
+        "is_data": fs["is_data"],
+        "bs_data": fs["bs_data"],
+        "cf_data": fs["cf_data"],
+    }
+
     if req.format == "excel":
-        buffer, content_type = generate_excel(req)
+        buffer, content_type = generate_excel(req, fs)
     else:
-        buffer, content_type = generate_pdf(req)
+        buffer, content_type = generate_pdf(req, fs)
 
     return Response(content=buffer, media_type=content_type)
 
 
-def generate_excel(req: GenerateReportRequest):
+@router.post("/financial-statements")
+async def get_financial_statements(req: FinancialStatementsRequest):
+    fs = compute_financial_statements(
+        transactions=[
+            {
+                "account_code": t.account_code,
+                "amount": t.amount,
+                "line_type": t.line_type,
+            }
+            for t in req.transactions
+        ],
+        cash_flow_plans=[
+            {
+                "direction": p.direction,
+                "amount": p.amount,
+                "flow_type": p.flow_type,
+            }
+            for p in req.cash_flow_plans
+        ],
+        previous_balances=req.snapshot or {},
+    )
+    return fs
+
+
+def generate_excel(req: GenerateReportRequest, fs: dict):
     template_map = {
         "pl": "Compte_de_resultat.xlsx",
         "balance_sheet": "Bilan.xlsx",
@@ -88,7 +152,7 @@ def generate_excel(req: GenerateReportRequest):
     template_file = template_map.get(req.report_type)
 
     if template_file:
-        return fill_syscohada_template(template_file, req)
+        return fill_syscohada_template(template_file, req, fs)
 
     return generate_simple_excel(req)
 
@@ -101,7 +165,7 @@ def _safe_write_cell(ws: Worksheet, row: int, column: int, value: str):
         return
 
 
-def fill_syscohada_template(template_file: str, req: GenerateReportRequest):
+def fill_syscohada_template(template_file: str, req: GenerateReportRequest, fs: dict):
     template_path = os.path.join(TEMPLATES_DIR, template_file)
     wb = load_workbook(template_path)
     ws: Worksheet = wb.worksheets[0]
@@ -116,11 +180,11 @@ def fill_syscohada_template(template_file: str, req: GenerateReportRequest):
                 _safe_write_cell(ws, cell.row, cell.column + 1, today)
 
     if req.report_type == "pl":
-        _fill_compte_resultat(ws, req)
+        _fill_compte_resultat(ws, fs)
     elif req.report_type == "cash_flow":
-        _fill_flux_tresorerie(ws, req)
+        _fill_flux_tresorerie(ws, fs)
     elif req.report_type == "balance_sheet":
-        _fill_bilan(ws, req)
+        _fill_bilan(ws, fs)
 
     buffer = io.BytesIO()
     wb.save(buffer)
@@ -130,97 +194,46 @@ def fill_syscohada_template(template_file: str, req: GenerateReportRequest):
     return buffer.getvalue(), content_type
 
 
-def _fill_compte_resultat(ws: Worksheet, req: GenerateReportRequest):
-    ref_mapping = {
-        "TA": ["701", "7011", "7012"],
-        "TB": ["702"],
-        "TC": ["703", "706"],
-        "TD": ["704", "705", "707", "708"],
-        "RA": ["601", "6011", "6012"],
-        "RC": ["602"],
-        "RE": ["604", "605"],
-        "RG": ["625"],
-        "RH": ["621", "622", "623", "624", "626", "627", "628"],
-        "RI": ["63"],
-        "RJ": ["65"],
-        "RK": ["641", "642", "643", "644", "645", "646"],
-        "RL": ["681"],
-        "RM": ["671", "672"],
-        "TK": ["771", "772"],
-    }
-
-    ref_totals: dict[str, Decimal] = {}
-    for ref, prefixes in ref_mapping.items():
-        total = Decimal("0")
-        for t in req.transactions:
-            if any(t.account_code.startswith(p) for p in prefixes):
-                total += Decimal(t.amount)
-        ref_totals[ref] = total
+def _fill_compte_resultat(ws: Worksheet, fs: dict):
+    _ = (CR_MAPPING, CR_AGGREGATS)
+    cr_lines = fs.get("is_data", {}).get("lines", {})
 
     for row in ws.iter_rows():
         ref = row[0].value
-        if ref and ref in ref_totals:
-            row[4].value = ref_totals[ref]
-            if row[4].number_format in ("General", "@", None):
-                row[4].number_format = "#,##0"
-
-    def get(ref: str) -> Decimal:
-        return ref_totals.get(ref, Decimal("0"))
-
-    aggregats: dict[str, Decimal] = {
-        "XA": get("TA") - get("RA"),
-        "XB": get("TA") + get("TB") + get("TC") + get("TD"),
-        "XC": get("TA") + get("TB") + get("TC") + get("TD") - get("RC") - get("RE") - get("RG") - get("RH") - get("RI") - get("RJ"),
-        "XD": get("TA") + get("TB") + get("TC") + get("TD") - get("RC") - get("RE") - get("RG") - get("RH") - get("RI") - get("RJ") - get("RK"),
-    }
-    aggregats["XE"] = aggregats["XD"] - get("RL")
-    aggregats["XF"] = get("TK") - get("RM")
-    aggregats["XG"] = aggregats["XE"] + aggregats["XF"]
-    aggregats["XI"] = aggregats["XG"]
-
-    for row in ws.iter_rows():
-        ref = row[0].value
-        if ref and ref in aggregats:
+        if ref and ref in cr_lines:
             cell = row[4]
-            cell.value = aggregats[ref]
+            cell.value = float(Decimal(str(cr_lines[ref])))
             cell.number_format = "#,##0"
-            current_font = copy(cell.font) if cell.font else Font()
-            current_font.bold = True
-            cell.font = current_font
+            if str(ref).startswith("X"):
+                current_font = copy(cell.font) if cell.font else Font()
+                current_font.bold = True
+                cell.font = current_font
 
 
-def _fill_flux_tresorerie(ws: Worksheet, req: GenerateReportRequest):
-    plans = req.cash_flow_plans
-    total_in = sum(Decimal(p.amount) for p in plans if p.direction == "IN")
-    total_out = sum(Decimal(p.amount) for p in plans if p.direction == "OUT")
-    net = total_in - total_out
+def _fill_flux_tresorerie(ws: Worksheet, fs: dict):
+    cf_lines = fs.get("cf_data", {}).get("lines", {})
 
-    flux_map = {
-        "ZB": total_in,
-        "ZF": -total_out,
-        "ZG": net,
-        "ZH": net,
-    }
     for row in ws.iter_rows():
         ref = row[0].value
-        if ref and ref in flux_map:
-            row[4].value = flux_map[ref]
+        if ref and ref in cf_lines:
+            row[4].value = float(Decimal(str(cf_lines[ref])))
             row[4].number_format = "#,##0"
 
 
-def _fill_bilan(ws: Worksheet, req: GenerateReportRequest):
-        snapshot = req.snapshot or {}
-        if snapshot.get("is_net") is not None:
-            result_net = Decimal(str(snapshot.get("is_net", "0")))
-        else:
-            revenues = sum(Decimal(t.amount) for t in req.transactions if t.line_type == "REVENUE")
-            expenses = sum(Decimal(t.amount) for t in req.transactions if t.line_type == "EXPENSE")
-            result_net = revenues - expenses
+def _fill_bilan(ws: Worksheet, fs: dict):
+    _ = (BILAN_ACTIF_MAPPING, BILAN_PASSIF_MAPPING)
+    actif = fs.get("bs_data", {}).get("actif", {})
+    passif = fs.get("bs_data", {}).get("passif", {})
 
     for row in ws.iter_rows():
         ref = row[0].value
-        if ref == "CI":
-            row[10].value = result_net
+        if not ref:
+            continue
+        if ref in actif:
+            row[5].value = float(Decimal(str(actif[ref])))
+            row[5].number_format = "#,##0"
+        if ref in passif:
+            row[10].value = float(Decimal(str(passif[ref])))
             row[10].number_format = "#,##0"
 
 
@@ -299,7 +312,7 @@ def generate_simple_excel(req: GenerateReportRequest):
     return buffer.getvalue(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 
-def generate_pdf(req: GenerateReportRequest):
+def generate_pdf(req: GenerateReportRequest, fs: Optional[dict] = None):
     pdf = FPDF()
     pdf.add_page()
     pdf.set_auto_page_break(auto=True, margin=15)

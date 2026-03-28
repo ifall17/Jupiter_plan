@@ -20,6 +20,10 @@ export class TransactionsService {
     private readonly syscohadaMappingService: SyscohadaMappingService,
   ) {}
 
+  private buildBudgetActualKey(periodId: string, accountCode: string, department: string): string {
+    return `${periodId}::${accountCode}::${department}`;
+  }
+
   async list(params: {
     currentUser: TransactionsCurrentUser;
     period_id?: string;
@@ -333,6 +337,16 @@ export class TransactionsService {
 
     // For each period, aggregate validated transactions and update budget_lines
     for (const period of periods) {
+      await trx.budgetLine.updateMany({
+        where: {
+          org_id: orgId,
+          period_id: period.id,
+        },
+        data: {
+          amount_actual: new Prisma.Decimal('0'),
+        },
+      });
+
       // Get all validated transactions for this period grouped by key fields
       const transactions = await trx.transaction.findMany({
         where: {
@@ -348,25 +362,25 @@ export class TransactionsService {
         },
       });
 
-      // Group transactions by (account_code, account_label, department)
+      // Group transactions by (period_id, account_code, department)
       const grouped = new Map<string, Prisma.Decimal>();
       for (const tx of transactions) {
-        const key = `${tx.account_code}|${tx.account_label}|${tx.department}`;
+        const key = this.buildBudgetActualKey(period.id, tx.account_code, tx.department);
         const existing = grouped.get(key) ?? new Prisma.Decimal('0');
         grouped.set(key, existing.plus(tx.amount));
       }
 
       // Update budget_lines for this period
       for (const [key, totalAmount] of grouped.entries()) {
-        const [accountCode, accountLabel, department] = key.split('|');
+        const [, accountCode, department] = key.split('::');
         
-        // Find all budget_lines matching this transaction group
+        // Find all budget_lines matching this transaction group.
+        // Do not depend on account_label because legacy data often differs only by label wording.
         const budgetLines = await trx.budgetLine.findMany({
           where: {
             org_id: orgId,
             period_id: period.id,
             account_code: accountCode,
-            account_label: accountLabel,
             department: department,
           },
           select: { id: true },

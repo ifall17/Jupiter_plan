@@ -74,6 +74,7 @@ describe('BudgetsService', () => {
     // Arrange
     budgetsRepository.getNextVersion.mockResolvedValue(1);
     budgetsRepository.create.mockResolvedValue(baseBudget as never);
+    budgetsRepository.findByIdInOrg.mockResolvedValue(baseBudget as never);
 
     // Act
     const result = await service.createBudget(currentUser, { name: 'Budget FY2026', fiscal_year_id: 'fy-1' });

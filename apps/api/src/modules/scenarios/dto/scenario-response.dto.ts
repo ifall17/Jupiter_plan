@@ -1,4 +1,4 @@
-import { ScenarioStatus, ScenarioType } from '@prisma/client';
+import { ScenarioCalculationMode, ScenarioStatus, ScenarioType } from '@prisma/client';
 
 export class HypothesisResponseDto {
   id!: string;
@@ -29,6 +29,7 @@ export class ScenarioResponseDto {
   name!: string;
   type!: ScenarioType;
   status!: ScenarioStatus;
+  calculation_mode!: ScenarioCalculationMode;
   budget_id!: string;
   hypotheses!: HypothesisResponseDto[] | null;
   snapshot!: FinancialSnapshotDto | null;

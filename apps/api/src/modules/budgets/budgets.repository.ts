@@ -43,6 +43,57 @@ export class BudgetsRepository extends BaseRepository<RepoBudget> {
     super(prisma);
   }
 
+  private buildActualKey(periodId: string, accountCode: string, department: string): string {
+    return `${periodId}::${accountCode}::${department}`;
+  }
+
+  private async applyActualAmounts(budgets: RepoBudget[]): Promise<RepoBudget[]> {
+    if (budgets.length === 0) {
+      return budgets;
+    }
+
+    const orgId = budgets[0].org_id;
+    const periodIds = Array.from(new Set(
+      budgets.flatMap((budget) => budget.budget_lines.map((line) => line.period_id)),
+    ));
+
+    if (periodIds.length === 0) {
+      return budgets;
+    }
+
+    const transactions = await this.prisma.transaction.findMany({
+      where: {
+        org_id: orgId,
+        period_id: { in: periodIds },
+        is_validated: true,
+      },
+      select: {
+        period_id: true,
+        account_code: true,
+        department: true,
+        amount: true,
+      },
+    });
+
+    const actualByKey = new Map<string, Prisma.Decimal>();
+    for (const transaction of transactions) {
+      const key = this.buildActualKey(transaction.period_id, transaction.account_code, transaction.department);
+      const existing = actualByKey.get(key) ?? new Prisma.Decimal('0');
+      actualByKey.set(key, existing.plus(transaction.amount.abs()));
+    }
+
+    for (const budget of budgets) {
+      budget.budget_lines = budget.budget_lines.map((line) => ({
+        ...line,
+        amount_actual:
+          actualByKey.get(this.buildActualKey(line.period_id, line.account_code, line.department))
+          ?? new Prisma.Decimal('0'),
+      }));
+    }
+
+    return budgets;
+  }
+
   async findOne(id: string, orgId: string): Promise<RepoBudget> {
     const budget = await this.findByIdInOrg(id, orgId);
     if (!budget) {
@@ -118,7 +169,7 @@ export class BudgetsRepository extends BaseRepository<RepoBudget> {
   }
 
   async findByIdInOrg(id: string, orgId: string): Promise<RepoBudget | null> {
-    return this.prisma.budget.findFirst({
+    const budget = await this.prisma.budget.findFirst({
       where: { id, org_id: orgId },
       include: {
         budget_lines: {
@@ -127,6 +178,13 @@ export class BudgetsRepository extends BaseRepository<RepoBudget> {
         },
       },
     }) as unknown as RepoBudget | null;
+
+    if (!budget) {
+      return null;
+    }
+
+    const [withActuals] = await this.applyActualAmounts([budget]);
+    return withActuals;
   }
 
   async findPaginated(params: {
@@ -160,7 +218,9 @@ export class BudgetsRepository extends BaseRepository<RepoBudget> {
     })) as unknown as RepoBudget[];
     const total = await this.prisma.budget.count({ where });
 
-    return { items, total };
+    const itemsWithActuals = await this.applyActualAmounts(items);
+
+    return { items: itemsWithActuals, total };
   }
 
   async getNextVersion(orgId: string, fiscalYearId: string): Promise<number> {

@@ -2,9 +2,11 @@ import { Controller, Get, Query, Req, UnauthorizedException, UseGuards } from '@
 import { Request } from 'express';
 import { UserRole } from '@shared/enums';
 import { Roles } from '../../common/decorators/roles.decorator';
+import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { OrgGuard } from '../../common/guards/org.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
+import { JwtPayload } from '../auth/strategies/jwt.strategy';
 import { DashboardResponseDto } from './dto/dashboard-response.dto';
 import { DashboardCurrentUser, DashboardService } from './dashboard.service';
 
@@ -44,6 +46,27 @@ export class DashboardController {
   }> {
     const currentUser = this.getCurrentUser(req);
     return this.dashboardService.getMonthlyData(currentUser.org_id);
+  }
+
+  @Get('financial-statements')
+  @Roles(UserRole.SUPER_ADMIN, UserRole.FPA, UserRole.LECTEUR)
+  @UseGuards(JwtAuthGuard, RolesGuard, OrgGuard)
+  async getFinancialStatements(
+    @Query('period_id') periodId?: string,
+    @Query('ytd') ytd?: string,
+    @Query('quarter') quarter?: string,
+    @Query('from_period') fromPeriod?: string,
+    @Query('to_period') toPeriod?: string,
+    @CurrentUser() user?: JwtPayload,
+  ) {
+    const quarterNumber = quarter ? Number.parseInt(quarter, 10) : undefined;
+    return this.dashboardService.getFinancialStatements(user!.org_id, {
+      period_id: periodId,
+      ytd: ytd === 'true',
+      quarter: quarterNumber && !Number.isNaN(quarterNumber) ? quarterNumber : undefined,
+      from_period: fromPeriod,
+      to_period: toPeriod,
+    });
   }
 
   private getCurrentUser(req: Request): DashboardCurrentUser {

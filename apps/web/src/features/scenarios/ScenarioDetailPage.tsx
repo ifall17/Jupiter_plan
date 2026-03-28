@@ -12,7 +12,7 @@ type ScenarioHypothesis = {
   label: string;
   parameter: string;
   value: string;
-  unit: '%' | 'FCFA' | 'multiplier';
+  unit: '%' | 'FCFA' | 'multiplier' | 'jours';
 };
 
 type ScenarioSnapshot = {
@@ -35,6 +35,7 @@ type ScenarioDetail = {
   name: string;
   type: 'BASE' | 'OPTIMISTE' | 'PESSIMISTE' | 'CUSTOM';
   status: 'DRAFT' | 'CALCULATING' | 'CALCULATED' | 'SAVED';
+  calculation_mode?: ScenarioCalculationMode | null;
   budget_id: string;
   hypotheses: ScenarioHypothesis[] | null;
   snapshot: ScenarioSnapshot | null;
@@ -54,14 +55,60 @@ type HypothesisFormState = {
   label: string;
   parameter: string;
   value: string;
-  unit: '%' | 'FCFA' | 'multiplier';
+  unit: '%' | 'FCFA' | 'multiplier' | 'jours';
 };
+
+type ScenarioCalculationMode = 'GLOBAL' | 'COMPTES_CIBLES';
+
+function resolveScenarioCalculationMode(value?: ScenarioCalculationMode | null): ScenarioCalculationMode {
+  return value === 'COMPTES_CIBLES' ? 'COMPTES_CIBLES' : 'GLOBAL';
+}
 
 const STATUS_STYLE: Record<string, { bg: string; color: string }> = {
   DRAFT: { bg: 'var(--surface2)', color: 'var(--text-md)' },
   CALCULATING: { bg: 'var(--gold-lt)', color: 'var(--gold)' },
   CALCULATED: { bg: 'var(--indigo-lt)', color: 'var(--indigo)' },
   SAVED: { bg: 'var(--kola-lt)', color: 'var(--kola)' },
+};
+
+const PARAMETER_LABELS: Record<string, string> = {
+  revenue_growth:   "Croissance du chiffre d'affaires",
+  cost_reduction:   'Réduction des charges',
+  payroll_increase: 'Augmentation de la masse salariale',
+  capex_increase:   'Augmentation des investissements (CAPEX)',
+  export_growth:    'Croissance des exportations',
+  dso_change:       'Variation du DSO (délais clients)',
+  dpo_change:       'Variation du DPO (délais fournisseurs)',
+  defect_rate:      'Taux de défauts',
+};
+
+const UNIT_LABELS: Record<string, string> = {
+  '%':          '%',
+  'FCFA':       'FCFA',
+  'multiplier': 'Multiplicateur',
+  'jours':      'Jours',
+};
+
+const PARAMETER_DEFAULT_UNITS: Record<string, HypothesisFormState['unit']> = {
+  revenue_growth: '%',
+  cost_reduction: '%',
+  payroll_increase: '%',
+  capex_increase: 'FCFA',
+  export_growth: '%',
+  dso_change: 'jours',
+  dpo_change: 'jours',
+  defect_rate: '%',
+};
+
+const PARAMETER_UNIT_OPTIONS: Record<string, HypothesisFormState['unit'][]> = {
+  revenue_growth: ['%', 'FCFA', 'multiplier'],
+  cost_reduction: ['%', 'FCFA', 'multiplier'],
+  payroll_increase: ['%', 'FCFA', 'multiplier'],
+  capex_increase: ['%', 'FCFA', 'multiplier'],
+  export_growth: ['%', 'FCFA', 'multiplier'],
+  dso_change: ['jours'],
+  dpo_change: ['jours'],
+  defect_rate: ['%', 'FCFA', 'multiplier'],
 };
 
 export default function ScenarioDetailPage() {
@@ -82,6 +129,7 @@ export default function ScenarioDetailPage() {
   });
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const [calculationMode, setCalculationMode] = useState<ScenarioCalculationMode>('GLOBAL');
 
   const scenarioQuery = useQuery({
     queryKey: ['scenario', id],
@@ -123,11 +171,19 @@ export default function ScenarioDetailPage() {
       );
       setLastHypothesisAction(null);
     },
-    onError: (err: any) => setError(err.response?.data?.message ?? 'Erreur lors de l ajout de l hypothèse'),
+    onError: (err: any) => {
+      const code = err.response?.data?.code;
+      if (code === 'SCENARIO_NOT_EDITABLE') {
+        setError('Les hypothèses ne peuvent être modifiées que pour un scénario en brouillon (DRAFT).');
+        return;
+      }
+      setError(err.response?.data?.message ?? 'Erreur lors de l ajout de l hypothèse');
+    },
   });
 
   const calculateMutation = useMutation({
-    mutationFn: async () => apiClient.post(`/scenarios/${id}/calculate`, {}).then(unwrapApiData),
+    mutationFn: async (mode: ScenarioCalculationMode) =>
+      apiClient.post(`/scenarios/${id}/calculate`, { calculation_mode: mode }).then(unwrapApiData),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ['scenario', id] });
     },
@@ -191,8 +247,14 @@ export default function ScenarioDetailPage() {
     );
   }
 
+  const resolvedCalculationMode = resolveScenarioCalculationMode(scenario.calculation_mode);
+  const lastModeLabel = resolvedCalculationMode === 'COMPTES_CIBLES' ? 'Comptes cibles' : 'Global';
   const statusStyle = STATUS_STYLE[scenario.status] ?? STATUS_STYLE.DRAFT;
   const hypotheses = scenario.hypotheses ?? [];
+  const canManageHypotheses = canEditHypothesis && scenario.status === 'DRAFT';
+  const unitOptions = PARAMETER_UNIT_OPTIONS[hypothesisForm.parameter] ?? ['%', 'FCFA', 'multiplier'];
+  const pnlHypotheses = hypotheses.filter((hypothesis) => !['dso_change', 'dpo_change'].includes(hypothesis.parameter));
+  const bfrHypotheses = hypotheses.filter((hypothesis) => ['dso_change', 'dpo_change'].includes(hypothesis.parameter));
 
   const toPayloadList = (list: Array<{ label: string; parameter: string; value: string; unit: string }>) => ({
     hypotheses: list.map((item) => ({
@@ -253,6 +315,7 @@ export default function ScenarioDetailPage() {
           <p className="page-eyebrow">SCÉNARIO</p>
           <h1 className="page-title">{scenario.name}</h1>
           <p className="page-sub">Type : {scenarioTypeLabel} · Budget de base : {budget?.name ?? scenario.budget_id}</p>
+          <p className="page-sub">Dernier mode utilisé : {lastModeLabel}</p>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           <span style={{ padding: '4px 12px', borderRadius: 20, fontSize: 11, fontWeight: 700, background: statusStyle.bg, color: statusStyle.color }}>
@@ -297,13 +360,21 @@ export default function ScenarioDetailPage() {
         <section style={{ border: '1px solid var(--border)', borderRadius: 14, background: 'var(--surface)', padding: 20 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
             <h3 style={{ margin: 0, fontSize: 16, color: 'var(--text-hi)' }}>Hypothèses</h3>
-            <button
-              onClick={openCreateHypothesisModal}
-              style={{ padding: '8px 14px', borderRadius: 8, border: 'none', background: 'var(--terra)', color: '#fff', cursor: 'pointer', fontWeight: 600, fontSize: 12 }}
-            >
-              + Ajouter une hypothèse
-            </button>
+            {canManageHypotheses ? (
+              <button
+                onClick={openCreateHypothesisModal}
+                style={{ padding: '8px 14px', borderRadius: 8, border: 'none', background: 'var(--terra)', color: '#fff', cursor: 'pointer', fontWeight: 600, fontSize: 12 }}
+              >
+                + Ajouter une hypothèse
+              </button>
+            ) : null}
           </div>
+
+          {!canManageHypotheses ? (
+            <p style={{ fontSize: 13, color: 'var(--text-md)', marginTop: 0, marginBottom: 12 }}>
+              Les hypothèses sont verrouillées dès que le scénario n'est plus en brouillon (DRAFT).
+            </p>
+          ) : null}
 
           {hypotheses.length === 0 ? (
             <p style={{ fontSize: 13, color: 'var(--text-md)', margin: 0 }}>Aucune hypothèse pour ce scénario.</p>
@@ -323,8 +394,8 @@ export default function ScenarioDetailPage() {
                     }}
                   >
                     <span style={{ fontSize: 13, fontWeight: 600 }}>{hypothesis.label}</span>
-                    <span style={{ fontSize: 12, color: 'var(--text-md)' }}>{hypothesis.parameter}</span>
-                    <span style={{ fontSize: 12, color: 'var(--text-hi)', textAlign: 'right' }}>{hypothesis.value} {hypothesis.unit}</span>
+                    <span style={{ fontSize: 12, color: 'var(--text-md)' }}>{PARAMETER_LABELS[hypothesis.parameter] ?? hypothesis.parameter}</span>
+                    <span style={{ fontSize: 12, color: 'var(--text-hi)', textAlign: 'right' }}>{hypothesis.value} {UNIT_LABELS[hypothesis.unit] ?? hypothesis.unit}</span>
                     <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
                       <button
                         onClick={(event) => {
@@ -332,7 +403,7 @@ export default function ScenarioDetailPage() {
                           openEditHypothesisModal(hypothesis);
                         }}
                         style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--surface)', cursor: 'pointer', fontSize: 11, fontWeight: 600 }}
-                        disabled={upsertHypothesisMutation.isPending}
+                        disabled={upsertHypothesisMutation.isPending || !canManageHypotheses}
                       >
                         Éditer
                       </button>
@@ -342,7 +413,7 @@ export default function ScenarioDetailPage() {
                           handleDeleteHypothesis(hypothesis.id);
                         }}
                         style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid var(--terra)', background: 'transparent', color: 'var(--terra)', cursor: 'pointer', fontSize: 11, fontWeight: 600 }}
-                        disabled={upsertHypothesisMutation.isPending}
+                        disabled={upsertHypothesisMutation.isPending || !canManageHypotheses}
                       >
                         Supprimer
                       </button>
@@ -368,17 +439,47 @@ export default function ScenarioDetailPage() {
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, flexWrap: 'wrap', gap: 10 }}>
           <h3 style={{ margin: 0, fontSize: 16, color: 'var(--text-hi)' }}>Calcul</h3>
           <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <span
+              style={{
+                padding: '4px 10px',
+                borderRadius: 999,
+                fontSize: 11,
+                fontWeight: 700,
+                background: 'var(--surface2)',
+                border: '1px solid var(--border)',
+                color: 'var(--text-md)',
+              }}
+            >
+              Mode utilisé : {lastModeLabel}
+            </span>
             {scenario.status === 'DRAFT' && canEditHypothesis ? (
-              <button
-                onClick={() => {
-                  setError('');
-                  calculateMutation.mutate();
-                }}
-                disabled={calculateMutation.isPending}
-                style={{ padding: '8px 14px', borderRadius: 8, border: 'none', background: 'var(--indigo)', color: '#fff', cursor: 'pointer', fontWeight: 600, fontSize: 12 }}
-              >
-                {calculateMutation.isPending ? 'Calcul en cours...' : 'Calculer'}
-              </button>
+              <>
+                <select
+                  value={calculationMode}
+                  onChange={(event) => setCalculationMode(event.target.value as ScenarioCalculationMode)}
+                  style={{
+                    padding: '8px 10px',
+                    borderRadius: 8,
+                    border: '1px solid var(--border)',
+                    background: 'var(--surface)',
+                    fontSize: 12,
+                    color: 'var(--text-hi)',
+                  }}
+                >
+                  <option value="GLOBAL">Mode global</option>
+                  <option value="COMPTES_CIBLES">Mode comptes cibles</option>
+                </select>
+                <button
+                  onClick={() => {
+                    setError('');
+                    calculateMutation.mutate(calculationMode);
+                  }}
+                  disabled={calculateMutation.isPending}
+                  style={{ padding: '8px 14px', borderRadius: 8, border: 'none', background: 'var(--indigo)', color: '#fff', cursor: 'pointer', fontWeight: 600, fontSize: 12 }}
+                >
+                  {calculateMutation.isPending ? 'Calcul en cours...' : 'Calculer'}
+                </button>
+              </>
             ) : null}
 
             {scenario.status === 'CALCULATED' && canEditHypothesis ? (
@@ -428,6 +529,51 @@ export default function ScenarioDetailPage() {
         ) : (
           <p style={{ fontSize: 13, color: 'var(--text-md)', margin: 0 }}>Aucun résultat disponible pour ce scénario.</p>
         )}
+
+        <div
+          style={{
+            marginTop: 14,
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
+            gap: 10,
+          }}
+        >
+          <div style={{ border: '1px solid var(--border)', borderRadius: 10, background: 'var(--surface2)', padding: 12 }}>
+            <p style={{ margin: 0, marginBottom: 8, fontSize: 11, color: 'var(--text-lo)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+              Impact P&L
+            </p>
+            <p style={{ margin: 0, marginBottom: 8, fontSize: 12, color: 'var(--text-md)' }}>
+              Affecte le compte de résultat (CA, charges, EBITDA, résultat net).
+            </p>
+            {pnlHypotheses.length === 0 ? (
+              <p style={{ margin: 0, fontSize: 12, color: 'var(--text-md)' }}>Aucune hypothèse P&L.</p>
+            ) : (
+              <ul style={{ margin: 0, paddingLeft: 18, fontSize: 12, color: 'var(--text-hi)' }}>
+                {pnlHypotheses.map((hypothesis) => (
+                  <li key={hypothesis.id}>{hypothesis.label}</li>
+                ))}
+              </ul>
+            )}
+          </div>
+
+          <div style={{ border: '1px solid var(--border)', borderRadius: 10, background: 'var(--surface2)', padding: 12 }}>
+            <p style={{ margin: 0, marginBottom: 8, fontSize: 11, color: 'var(--text-lo)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+              Impact BFR / Trésorerie
+            </p>
+            <p style={{ margin: 0, marginBottom: 8, fontSize: 12, color: 'var(--text-md)' }}>
+              Affecte surtout le bilan et les flux de trésorerie (DSO/DPO), pas directement le CA.
+            </p>
+            {bfrHypotheses.length === 0 ? (
+              <p style={{ margin: 0, fontSize: 12, color: 'var(--text-md)' }}>Aucune hypothèse de délais.</p>
+            ) : (
+              <ul style={{ margin: 0, paddingLeft: 18, fontSize: 12, color: 'var(--text-hi)' }}>
+                {bfrHypotheses.map((hypothesis) => (
+                  <li key={hypothesis.id}>{hypothesis.label}</li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </div>
       </section>
 
       {showHypothesisModal ? (
@@ -451,12 +597,24 @@ export default function ScenarioDetailPage() {
               />
               <select
                 value={hypothesisForm.parameter}
-                onChange={(event) => setHypothesisForm({ ...hypothesisForm, parameter: event.target.value })}
+                onChange={(event) => {
+                  const parameter = event.target.value;
+                  setHypothesisForm({
+                    ...hypothesisForm,
+                    parameter,
+                    unit: PARAMETER_DEFAULT_UNITS[parameter] ?? hypothesisForm.unit,
+                  });
+                }}
                 style={{ width: '100%', borderRadius: 8, border: '1px solid var(--border)', padding: '10px 12px', fontSize: 13 }}
               >
-                <option value="revenue_growth">revenue_growth</option>
-                <option value="cost_reduction">cost_reduction</option>
-                <option value="capex_increase">capex_increase</option>
+                <option value="revenue_growth">Croissance du chiffre d'affaires</option>
+                <option value="cost_reduction">Réduction des charges</option>
+                <option value="payroll_increase">Augmentation de la masse salariale</option>
+                <option value="capex_increase">Augmentation des investissements (CAPEX)</option>
+                <option value="export_growth">Croissance des exportations</option>
+                <option value="dso_change">Variation du DSO (délais clients)</option>
+                <option value="dpo_change">Variation du DPO (délais fournisseurs)</option>
+                <option value="defect_rate">Taux de défauts</option>
               </select>
               <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 10 }}>
                 <input
@@ -470,9 +628,11 @@ export default function ScenarioDetailPage() {
                   onChange={(event) => setHypothesisForm({ ...hypothesisForm, unit: event.target.value as HypothesisFormState['unit'] })}
                   style={{ width: '100%', borderRadius: 8, border: '1px solid var(--border)', padding: '10px 12px', fontSize: 13 }}
                 >
-                  <option value="%">%</option>
-                  <option value="FCFA">FCFA</option>
-                  <option value="multiplier">multiplier</option>
+                  {unitOptions.map((unit) => (
+                    <option key={unit} value={unit}>
+                      {UNIT_LABELS[unit] ?? unit}
+                    </option>
+                  ))}
                 </select>
               </div>
             </div>

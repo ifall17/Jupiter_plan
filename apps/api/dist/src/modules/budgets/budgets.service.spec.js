@@ -64,6 +64,7 @@ describe('BudgetsService', () => {
     it('should create budget with status DRAFT', async () => {
         budgetsRepository.getNextVersion.mockResolvedValue(1);
         budgetsRepository.create.mockResolvedValue(baseBudget);
+        budgetsRepository.findByIdInOrg.mockResolvedValue(baseBudget);
         const result = await service.createBudget(currentUser, { name: 'Budget FY2026', fiscal_year_id: 'fy-1' });
         expect(result.status).toBe(client_1.BudgetStatus.DRAFT);
     });

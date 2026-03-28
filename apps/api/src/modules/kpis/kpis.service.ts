@@ -2,10 +2,16 @@ import { BadRequestException, Injectable, Logger, NotFoundException } from '@nes
 import { AlertSeverity, PeriodStatus, Prisma } from '@prisma/client';
 import { UserRole } from '@shared/enums';
 import { CACHE_TTL_KPI } from '../../common/constants/business.constants';
+import { KPI_ACCOUNT_PREFIXES } from '../../common/constants/syscohada-financial-mapping';
+import { CalcEngineClient } from '../../common/services/calc-engine.client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { RedisService } from '../../redis/redis.service';
 import { KpiResponseDto } from './dto/kpi-response.dto';
 import { KpiValueResponseDto } from './dto/kpi-value-response.dto';
+
+// Taux IS Sénégal (SYSCOHADA)
+// Source : Code Général des Impôts Sénégal
+const TAUX_IS_SENEGAL = 0.30;
 
 export interface KpiCurrentUser {
   sub: string;
@@ -21,6 +27,7 @@ export class KpisService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly redisService: RedisService,
+    private readonly calcEngineClient: CalcEngineClient,
   ) {}
 
   async listActiveKpis(currentUser: KpiCurrentUser): Promise<KpiResponseDto[]> {
@@ -171,7 +178,7 @@ export class KpisService {
 
     const [transactions, budgetLines, cfPlans] = await Promise.all([
       this.prisma.transaction.findMany({
-        where: { org_id: orgId, period_id: periodId },
+        where: { org_id: orgId, period_id: periodId, is_validated: true },
         select: { account_code: true, amount: true },
       }),
       this.prisma.budgetLine.findMany({
@@ -194,6 +201,14 @@ export class KpisService {
     const absDecimal = (value: Prisma.Decimal): Prisma.Decimal => (value.lt(zero) ? value.neg() : value);
     const startsWithAny = (accountCode: string, prefixes: string[]): boolean =>
       prefixes.some((prefix) => accountCode.startsWith(prefix));
+    const parseDecimal = (value: string | Prisma.Decimal | undefined): Prisma.Decimal => {
+      if (value === undefined) return zero;
+      try {
+        return value instanceof Prisma.Decimal ? value : new Prisma.Decimal(value);
+      } catch {
+        return zero;
+      }
+    };
 
     const sumTransactions = (
       predicate: (tx: { account_code: string; amount: Prisma.Decimal }) => boolean,
@@ -204,17 +219,49 @@ export class KpisService {
         return sum.plus(absolute ? absDecimal(tx.amount) : tx.amount);
       }, zero);
 
-    const ca = sumTransactions((tx) => startsWithAny(tx.account_code, ['7']) || tx.amount.gt(zero));
-    const charges = sumTransactions((tx) => startsWithAny(tx.account_code, ['6']) || tx.amount.lt(zero));
-    const purchases = sumTransactions((tx) => startsWithAny(tx.account_code, ['601', '602']));
-    const payroll = sumTransactions((tx) => startsWithAny(tx.account_code, ['64']));
-    const opex = sumTransactions((tx) => startsWithAny(tx.account_code, ['62', '63', '64', '65']));
+    let ca = sumTransactions((tx) => startsWithAny(tx.account_code, [...KPI_ACCOUNT_PREFIXES.CA]));
+    let ebitda = ca.minus(sumTransactions((tx) => startsWithAny(tx.account_code, [...KPI_ACCOUNT_PREFIXES.CHARGES])));
+    let netResult = zero;
+
+    try {
+      const fs = await this.calcEngineClient.post<{ is_data?: { lines?: Record<string, string> } }>(
+        '/reports/financial-statements',
+        {
+          transactions: transactions.map((tx) => ({
+            account_code: tx.account_code,
+            amount: tx.amount.toString(),
+          })),
+          cash_flow_plans: cfPlans.map((plan) => ({
+            direction: plan.direction,
+            amount: plan.amount.toString(),
+            inflow: plan.inflow.toString(),
+            outflow: plan.outflow.toString(),
+          })),
+        },
+      );
+
+      const lines = fs.is_data?.lines;
+      if (lines) {
+        ca = parseDecimal(lines.XB);
+        ebitda = parseDecimal(lines.XD);
+        netResult = parseDecimal(lines.XI);
+      }
+    } catch (error) {
+      this.logger.warn(
+        `Fallback calcul local KPIs (CalcEngine indisponible) - org: ${orgId}, period: ${periodId}, reason: ${(error as Error).message}`,
+      );
+    }
+
+    // Charges derivees de la relation EBITDA = CA - Charges
+    const charges = ca.minus(ebitda);
+    const purchases = sumTransactions((tx) => startsWithAny(tx.account_code, [...KPI_ACCOUNT_PREFIXES.ACHATS]));
+    const payroll = sumTransactions((tx) => startsWithAny(tx.account_code, [...KPI_ACCOUNT_PREFIXES.MASSE_SALARIALE]));
+    const opex = sumTransactions((tx) => startsWithAny(tx.account_code, [...KPI_ACCOUNT_PREFIXES.OPEX]));
 
     const totalBudget = budgetLines.reduce((sum, line) => sum.plus(absDecimal(line.amount_budget)), zero);
-    const ebitda = ca.minus(charges);
     const marge = ca.gt(zero) ? ebitda.div(ca).mul(hundred) : zero;
     const grossMargin = ca.gt(zero) ? ca.minus(purchases).div(ca).mul(hundred) : zero;
-    const roe = totalBudget.gt(zero) ? ebitda.div(totalBudget).mul(hundred) : zero;
+    const roe = totalBudget.gt(zero) ? netResult.div(totalBudget).mul(hundred) : zero;
 
     const receivables = ca.mul(factorReceivables);
     const payables = purchases.mul(factorPayables);
@@ -228,7 +275,8 @@ export class KpisService {
     const opexRatio = ca.gt(zero) ? opex.div(ca).mul(hundred) : zero;
     const payrollRatio = ca.gt(zero) ? payroll.div(ca).mul(hundred) : zero;
     const operatingMargin = ca.gt(zero) ? ca.minus(charges).div(ca).mul(hundred) : zero;
-    const roa = totalBudget.gt(zero) ? ebitda.div(totalBudget).mul(hundred) : zero;
+    const netMargin = ca.gt(zero) ? netResult.div(ca).mul(hundred) : zero;
+    const roa = totalBudget.gt(zero) ? netResult.div(totalBudget).mul(hundred) : zero;
     const roce = totalBudget.gt(zero) ? ebitda.div(totalBudget).mul(hundred) : zero;
 
     const sumFlowByDirection = (direction: 'IN' | 'OUT'): Prisma.Decimal =>
@@ -263,7 +311,7 @@ export class KpisService {
       GROSS_MARGIN: grossMargin,
       EBITDA_MARGIN: marge,
       OPERATING_MARGIN: operatingMargin,
-      NET_MARGIN: marge,
+      NET_MARGIN: netMargin,
       ROE: roe,
       ROA: roa,
       DPO: dpo,
@@ -301,6 +349,25 @@ export class KpisService {
           calculated_at: new Date(),
         },
       });
+
+      // Génération des alertes : créer si WARN ou CRITICAL, supprimer si retour à INFO
+      await this.prisma.alert.deleteMany({
+        where: { org_id: orgId, kpi_id: kpiDef.id, period_id: periodId },
+      });
+      if (severity !== AlertSeverity.INFO) {
+        const threshold = severity === AlertSeverity.CRITICAL ? kpiDef.threshold_critical : kpiDef.threshold_warn;
+        const seuilLabel = severity === AlertSeverity.CRITICAL ? 'seuil critique' : "seuil d'alerte";
+        await this.prisma.alert.create({
+          data: {
+            org_id: orgId,
+            kpi_id: kpiDef.id,
+            period_id: periodId,
+            severity,
+            message: `${kpiDef.label} : valeur calculée = ${decimalValue} ${kpiDef.unit}${threshold !== null ? ` (${seuilLabel} : ${threshold})` : ''}`,
+            is_read: false,
+          },
+        });
+      }
 
       calculatedCodes.push(kpiDef.code);
     }
@@ -383,10 +450,124 @@ export class KpisService {
       }
     }
 
+    try {
+      const calcLines = await this.getCalcIncomeStatementLinesForPeriods(currentUser.org_id, periodIds);
+      if (calcLines) {
+        const zero = new Prisma.Decimal('0');
+        const hundred = new Prisma.Decimal('100');
+        const toDecimal = (value: string | undefined): Prisma.Decimal => {
+          if (!value) return zero;
+          try {
+            return new Prisma.Decimal(value);
+          } catch {
+            return zero;
+          }
+        };
+
+        const ca = toDecimal(calcLines.XB);
+        const ebitda = toDecimal(calcLines.XD);
+        const operating = toDecimal(calcLines.XE);
+        const net = toDecimal(calcLines.XI);
+        const achats = toDecimal(calcLines.RA);
+        const charges = ca.minus(ebitda);
+        const ebitdaMargin = ca.gt(zero) ? ebitda.div(ca).mul(hundred) : zero;
+        const netMargin = ca.gt(zero) ? net.div(ca).mul(hundred) : zero;
+        const operatingMargin = ca.gt(zero) ? operating.div(ca).mul(hundred) : zero;
+        const grossMargin = ca.gt(zero) ? ca.minus(achats).div(ca).mul(hundred) : zero;
+
+        const applyOverride = (code: string, value: Prisma.Decimal): void => {
+          const entry = result.find((r) => r.kpi_code === code);
+          if (!entry) return;
+          entry.value = value.toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP).toString();
+          const kpiVals = byCode.get(code);
+          if (kpiVals?.length) {
+            entry.severity = this.computeKpiSeverity(kpiVals[0].kpi, value);
+          }
+        };
+
+        applyOverride('CA', ca);
+        applyOverride('EBITDA', ebitda);
+        applyOverride('CHARGES', charges);
+        applyOverride('MARGE', ebitdaMargin);
+        applyOverride('MARGE_EBITDA', ebitdaMargin);
+        applyOverride('EBITDA_MARGIN', ebitdaMargin);
+        applyOverride('NET_MARGIN', netMargin);
+        applyOverride('OPERATING_MARGIN', operatingMargin);
+        applyOverride('GROSS_MARGIN', grossMargin);
+      }
+    } catch (error) {
+      this.logger.warn(
+        `Fallback aggregation KPIs locale (CalcEngine indisponible) - org: ${currentUser.org_id}, periods: [${periodIds.join(',')}], reason: ${(error as Error).message}`,
+      );
+    }
+
     return result.sort((a, b) => {
       const rank: Record<string, number> = { CRITICAL: 3, WARN: 2, INFO: 1 };
       return (rank[b.severity] ?? 0) - (rank[a.severity] ?? 0);
     });
+  }
+
+  private async getCalcIncomeStatementLinesForPeriods(
+    orgId: string,
+    periodIds: string[],
+  ): Promise<Record<string, string> | null> {
+    if (periodIds.length === 0) return null;
+
+    const [transactions, cashFlowPlans] = await Promise.all([
+      this.prisma.transaction.findMany({
+        where: {
+          org_id: orgId,
+          period_id: { in: periodIds },
+          is_validated: true,
+        },
+        select: {
+          account_code: true,
+          account_label: true,
+          department: true,
+          amount: true,
+          is_validated: true,
+          period: { select: { start_date: true } },
+        },
+      }),
+      this.prisma.cashFlowPlan.findMany({
+        where: { org_id: orgId, period_id: { in: periodIds } },
+        select: {
+          direction: true,
+          amount: true,
+          flow_type: true,
+          label: true,
+          planned_date: true,
+        },
+      }),
+    ]);
+
+    if (transactions.length === 0) return null;
+
+    const fs = await this.calcEngineClient.post<{ is_data?: { lines?: Record<string, string> } }>(
+      '/reports/financial-statements',
+      {
+        transactions: transactions.map((tx) => ({
+          account_code: tx.account_code,
+          account_label: tx.account_label,
+          department: tx.department,
+          line_type: tx.amount.gt(0) ? 'REVENUE' : 'EXPENSE',
+          amount: tx.amount.toString(),
+          transaction_date: tx.period.start_date.toISOString(),
+          is_validated: tx.is_validated,
+          label: tx.account_label,
+        })),
+        cash_flow_plans: cashFlowPlans.map((plan) => ({
+          direction: plan.direction,
+          amount: plan.amount.toString(),
+          flow_type: plan.flow_type,
+          label: plan.label,
+          planned_date: (plan.planned_date ?? new Date()).toISOString(),
+        })),
+        snapshot: {},
+      },
+    );
+
+    return fs.is_data?.lines ?? null;
   }
 
   private async resolvePeriodIds(

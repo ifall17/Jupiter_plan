@@ -1,5 +1,8 @@
 import { PeriodStatus, Prisma } from '@prisma/client';
 import { UserRole } from '@shared/enums';
+import { HttpService } from '@nestjs/axios';
+import { ConfigService } from '@nestjs/config';
+import { SyscohadaMappingService } from '../../common/services/syscohada-mapping.service';
 import { PrismaService } from '../../prisma/prisma.service';
 import { RedisService } from '../../redis/redis.service';
 import {
@@ -16,6 +19,9 @@ describe('DashboardService', () => {
   let kpisRepository: jest.Mocked<KpisRepository>;
   let alertsRepository: jest.Mocked<AlertsRepository>;
   let snapshotsRepository: jest.Mocked<SnapshotsRepository>;
+  let httpService: jest.Mocked<HttpService>;
+  let configService: jest.Mocked<ConfigService>;
+  let syscohadaMappingService: jest.Mocked<SyscohadaMappingService>;
 
   const currentUser = {
     sub: 'user-1',
@@ -26,8 +32,18 @@ describe('DashboardService', () => {
 
   beforeEach(() => {
     prisma = {
+      fiscalYear: {
+        findFirst: jest.fn(),
+      },
       period: {
         findFirst: jest.fn(),
+        findMany: jest.fn(),
+      },
+      transaction: {
+        findMany: jest.fn(),
+      },
+      budgetLine: {
+        findMany: jest.fn(),
       },
     } as unknown as jest.Mocked<PrismaService>;
 
@@ -55,12 +71,27 @@ describe('DashboardService', () => {
       findRunwayWeeks: jest.fn(),
     } as unknown as jest.Mocked<SnapshotsRepository>;
 
+    httpService = {
+      post: jest.fn(),
+    } as unknown as jest.Mocked<HttpService>;
+
+    configService = {
+      get: jest.fn(),
+    } as unknown as jest.Mocked<ConfigService>;
+
+    syscohadaMappingService = {
+      resolveReportLineTypes: jest.fn(),
+    } as unknown as jest.Mocked<SyscohadaMappingService>;
+
     service = new DashboardService(
       prisma,
       redis,
       kpisRepository,
       alertsRepository,
       snapshotsRepository,
+      httpService,
+      configService,
+      syscohadaMappingService,
     );
 
     (prisma.period.findFirst as unknown as jest.Mock).mockResolvedValue({
@@ -168,8 +199,8 @@ describe('DashboardService', () => {
     await service.invalidateCacheAfterTransactionValidation('org-1', 'period-1');
 
     // Assert
-    expect(redis.del).toHaveBeenCalledWith('dashboard:org-1:period-1');
-    expect(redis.delByPattern).toHaveBeenCalledWith('dashboard:org-1:AGG:*');
+    expect(redis.del).toHaveBeenCalledWith('dashboard:v2:org-1:period-1');
+    expect(redis.delByPattern).toHaveBeenCalledWith('dashboard:v2:org-1:AGG:*');
   });
 
   it('should aggregate all dashboard data in single response', async () => {
@@ -197,7 +228,7 @@ describe('DashboardService', () => {
 
     // Assert
     expect(redis.set).toHaveBeenCalledWith(
-      'dashboard:org-1:period-1',
+      'dashboard:v2:org-1:period-1',
       expect.any(String),
       'EX',
       300,
@@ -233,5 +264,56 @@ describe('DashboardService', () => {
     expect(Array.isArray(result.variance_pct)).toBe(true);
     expect(typeof result.runway_weeks).toBe('string');
     expect(typeof result.ca_trend[0].value).toBe('string');
+  });
+
+  it('should exclude unvalidated transactions from monthly calculations', async () => {
+    (prisma.fiscalYear.findFirst as unknown as jest.Mock).mockResolvedValue({ id: 'fy-1' } as never);
+    (prisma.period.findMany as unknown as jest.Mock).mockResolvedValue([
+      { id: 'period-1', period_number: 1 },
+    ] as never);
+    (prisma.transaction.findMany as unknown as jest.Mock).mockImplementation(async (args: { where?: Record<string, unknown> }) => {
+      const where = args?.where;
+      const hasValidatedFilter = where && 'is_validated' in where && where.is_validated === true;
+
+      if (where && 'amount' in where) {
+        return (hasValidatedFilter
+          ? [{ amount: new Prisma.Decimal('-200'), department: 'Sales' }]
+          : [
+              { amount: new Prisma.Decimal('-200'), department: 'Sales' },
+              { amount: new Prisma.Decimal('-900'), department: 'Ops' },
+            ]) as never;
+      }
+
+      return (hasValidatedFilter
+        ? [
+            { period_id: 'period-1', amount: new Prisma.Decimal('500'), department: 'Sales' },
+            { period_id: 'period-1', amount: new Prisma.Decimal('-200'), department: 'Sales' },
+          ]
+        : [
+            { period_id: 'period-1', amount: new Prisma.Decimal('500'), department: 'Sales' },
+            { period_id: 'period-1', amount: new Prisma.Decimal('-200'), department: 'Sales' },
+            { period_id: 'period-1', amount: new Prisma.Decimal('9000'), department: 'Ops' },
+          ]) as never;
+    });
+    (prisma.budgetLine.findMany as unknown as jest.Mock).mockResolvedValue([] as never);
+
+    const result = await service.getMonthlyData('org-1');
+
+    expect(result.monthly).toEqual([
+      { month: 'Jan', revenue: 500, expenses: 200, ebitda: 300 },
+    ]);
+    expect(result.expensesByDept).toEqual([{ name: 'Sales', value: 200 }]);
+    expect(prisma.transaction.findMany).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        where: expect.objectContaining({ is_validated: true }),
+      }),
+    );
+    expect(prisma.transaction.findMany).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        where: expect.objectContaining({ is_validated: true }),
+      }),
+    );
   });
 });

@@ -30,7 +30,7 @@ __decorate([
     __metadata("design:type", String)
 ], HypothesisDto.prototype, "value", void 0);
 __decorate([
-    (0, class_validator_1.IsIn)(['%', 'FCFA', 'multiplier']),
+    (0, class_validator_1.IsIn)(['%', 'FCFA', 'multiplier', 'jours']),
     __metadata("design:type", String)
 ], HypothesisDto.prototype, "unit", void 0);
 class AddHypothesisDto {

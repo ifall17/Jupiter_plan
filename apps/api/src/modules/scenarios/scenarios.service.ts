@@ -6,10 +6,11 @@ import { AuditAction, UserRole } from '@shared/enums';
 import { MAX_SCENARIO_COMPARE } from '../../common/constants/business.constants';
 import { PaginatedResponseDto } from '../../common/dto/paginated-response.dto';
 import { AuditService } from '../../common/services/audit.service';
-import { ScenariosRepository, RepoScenario } from './scenarios.repository';
+import { ScenariosRepository, RepoScenario, ScenarioCalculationModeValue } from './scenarios.repository';
 import { CreateScenarioDto } from './dto/create-scenario.dto';
 import { AddHypothesisDto } from './dto/add-hypothesis.dto';
 import { CompareScenariosDto } from './dto/compare-scenarios.dto';
+import { CalculateScenarioDto } from './dto/calculate-scenario.dto';
 import { ScenarioResponseDto } from './dto/scenario-response.dto';
 
 const SCENARIO_ERRORS = {
@@ -82,6 +83,7 @@ export class ScenariosService {
       budget_id: dto.budget_id,
       name: dto.name.trim(),
       type: dto.type,
+      calculation_mode: 'GLOBAL',
       created_by: currentUser.sub,
     });
 
@@ -95,7 +97,10 @@ export class ScenariosService {
   ): Promise<ScenarioResponseDto> {
     const scenario = await this.ensureOwnedScenario(currentUser, scenarioId);
     if (scenario.status !== ScenarioStatus.DRAFT) {
-      throw new BadRequestException({ code: 'SCENARIO_NOT_EDITABLE' });
+      throw new BadRequestException({
+        code: 'SCENARIO_NOT_EDITABLE',
+        message: 'Les hypothèses ne peuvent être modifiées que pour un scénario en brouillon (DRAFT).',
+      });
     }
 
     await this.scenariosRepository.replaceHypotheses(
@@ -116,18 +121,26 @@ export class ScenariosService {
   async calculateScenario(
     currentUser: ScenarioCurrentUser,
     scenarioId: string,
+    dto?: CalculateScenarioDto,
   ): Promise<{ scenario_id: string; status: 'PROCESSING' }> {
     const scenario = await this.ensureOwnedScenario(currentUser, scenarioId);
     if (scenario.status !== ScenarioStatus.DRAFT) {
-      throw new BadRequestException({ code: 'SCENARIO_NOT_EDITABLE' });
+      throw new BadRequestException({
+        code: 'SCENARIO_NOT_EDITABLE',
+        message: 'Le scénario doit être en brouillon (DRAFT) pour lancer le calcul.',
+      });
     }
 
     await this.scenariosRepository.updateStatus(scenario.id, currentUser.org_id, ScenarioStatus.DRAFT);
+
+    const calculationMode: ScenarioCalculationModeValue = dto?.calculation_mode ?? scenario.calculation_mode ?? 'GLOBAL';
+    await this.scenariosRepository.updateCalculationMode(scenario.id, currentUser.org_id, calculationMode);
 
     const snapshot = await this.scenariosRepository.calculateSnapshotFromBudget({
       scenarioId: scenario.id,
       orgId: currentUser.org_id,
       budgetId: scenario.budget_id,
+      calculationMode,
       hypotheses: scenario.hypotheses.map((h) => ({
         parameter: h.parameter,
         value: h.value.toString(),
@@ -234,6 +247,7 @@ export class ScenariosService {
       name: scenario.name,
       type: scenario.type,
       status: scenario.status,
+      calculation_mode: scenario.calculation_mode,
       budget_id: scenario.budget_id,
       hypotheses:
         role === UserRole.LECTEUR

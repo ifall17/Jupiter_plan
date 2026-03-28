@@ -1,7 +1,30 @@
 import { Injectable } from '@nestjs/common';
-import { BudgetStatus, LineType, Prisma, ScenarioStatus, ScenarioType } from '@prisma/client';
+import { BudgetStatus, LineType, Prisma, ScenarioCalculationMode, ScenarioStatus, ScenarioType } from '@prisma/client';
 import { UserRole } from '@shared/enums';
 import { PrismaService } from '../../prisma/prisma.service';
+
+export type ScenarioCalculationModeValue = 'GLOBAL' | 'COMPTES_CIBLES';
+
+const TARGETED_HYPOTHESIS_MAP: Record<
+  string,
+  {
+    lineTypes?: LineType[];
+    prefixes?: string[];
+    inverse?: boolean;
+  }
+> = {
+  revenue_growth: { lineTypes: [LineType.REVENUE] },
+  export_growth: { lineTypes: [LineType.REVENUE], prefixes: ['7012', '7013', '7014'] },
+  cost_reduction: { lineTypes: [LineType.EXPENSE], prefixes: ['601', '602', '604', '605'], inverse: true },
+  payroll_increase: {
+    lineTypes: [LineType.EXPENSE],
+    prefixes: ['621', '622', '641', '642', '643', '644', '645', '646'],
+  },
+  defect_rate: { lineTypes: [LineType.EXPENSE], prefixes: ['601', '602', '604'] },
+  capex_increase: { lineTypes: [LineType.CAPEX], prefixes: ['215', '218', '241', '244', '245', '246', '247', '248'] },
+  marketing_increase: { lineTypes: [LineType.EXPENSE], prefixes: ['623', '624'] },
+  overhead_reduction: { lineTypes: [LineType.EXPENSE], prefixes: ['625', '626', '627', '628'], inverse: true },
+};
 
 export type RepoScenario = {
   id: string;
@@ -10,6 +33,7 @@ export type RepoScenario = {
   name: string;
   type: ScenarioType;
   status: ScenarioStatus;
+  calculation_mode: ScenarioCalculationMode;
   created_at: Date;
   hypotheses: Array<{
     id: string;
@@ -102,6 +126,7 @@ export class ScenariosRepository {
     name: string;
     type: ScenarioType;
     created_by: string;
+    calculation_mode?: ScenarioCalculationModeValue;
   }): Promise<RepoScenario> {
     return this.prisma.scenario.create({
       data: {
@@ -109,6 +134,7 @@ export class ScenariosRepository {
         budget_id: data.budget_id,
         name: data.name,
         type: data.type,
+        calculation_mode: data.calculation_mode ?? 'GLOBAL',
         status: ScenarioStatus.DRAFT,
         created_by: data.created_by,
       },
@@ -128,7 +154,7 @@ export class ScenariosRepository {
       select: { status: true },
     });
 
-    return budget?.status === BudgetStatus.APPROVED;
+    return budget?.status === BudgetStatus.APPROVED || budget?.status === BudgetStatus.LOCKED;
   }
 
   async replaceHypotheses(scenarioId: string, orgId: string, hypotheses: Array<{
@@ -167,11 +193,23 @@ export class ScenariosRepository {
     });
   }
 
+  async updateCalculationMode(
+    scenarioId: string,
+    orgId: string,
+    calculationMode: ScenarioCalculationModeValue,
+  ): Promise<void> {
+    await this.prisma.scenario.updateMany({
+      where: { id: scenarioId, org_id: orgId },
+      data: { calculation_mode: calculationMode },
+    });
+  }
+
   async calculateSnapshotFromBudget(params: {
     scenarioId: string;
     orgId: string;
     budgetId: string;
     hypotheses: Array<{ parameter: string; value: string; unit: string }>;
+    calculationMode?: ScenarioCalculationModeValue;
   }): Promise<{
     period_id: string;
     is_revenue: Prisma.Decimal;
@@ -187,7 +225,7 @@ export class ScenariosRepository {
   }> {
     const lines = await this.prisma.budgetLine.findMany({
       where: { budget_id: params.budgetId, org_id: params.orgId },
-      select: { period_id: true, line_type: true, amount_budget: true },
+      select: { period_id: true, line_type: true, amount_budget: true, account_code: true },
       orderBy: { period_id: 'asc' },
     });
 
@@ -196,6 +234,7 @@ export class ScenariosRepository {
     }
 
     const periodId = lines[0].period_id;
+  const calculationMode = params.calculationMode ?? 'GLOBAL';
 
     let revenue = lines
       .filter((line) => line.line_type === LineType.REVENUE)
@@ -206,55 +245,178 @@ export class ScenariosRepository {
     let capex = lines
       .filter((line) => line.line_type === LineType.CAPEX)
       .reduce((sum, line) => sum.plus(line.amount_budget), new Prisma.Decimal('0'));
+    let receivablesDelta = new Prisma.Decimal('0');
+    let payablesDelta = new Prisma.Decimal('0');
+    const hundred = new Prisma.Decimal('100');
+    const thirty = new Prisma.Decimal('30');
+    const zero = new Prisma.Decimal('0');
 
-    for (const hypothesis of params.hypotheses) {
-      const param = hypothesis.parameter.trim().toLowerCase();
-      let value: Prisma.Decimal;
-      try {
-        value = new Prisma.Decimal(hypothesis.value);
-      } catch {
-        continue;
-      }
+    // Snapshot des valeurs de base avant application des hypothèses
+    const baseRevenue = revenue;
+    const baseExpenses = expenses;
+    const baseCapex = capex;
 
-      if (param === 'revenue_growth') {
-        if (hypothesis.unit === '%') {
-          revenue = revenue.mul(new Prisma.Decimal('1').plus(value.div(new Prisma.Decimal('100'))));
-        } else if (hypothesis.unit === 'FCFA') {
-          revenue = revenue.plus(value);
-        } else if (hypothesis.unit === 'multiplier') {
-          revenue = revenue.mul(value);
+    // Accumulateurs de taux (additifs, sans effet cascade entre hypothèses)
+    let revenuePctChange = new Prisma.Decimal('0');
+    let revenueDelta = new Prisma.Decimal('0');
+    let expensePctChange = new Prisma.Decimal('0');
+    let expenseDelta = new Prisma.Decimal('0');
+    let capexDelta = new Prisma.Decimal('0');
+    // DSO/DPO traités après calcul final revenue/expenses
+    const dsoDpoBatch: Array<{ param: string; value: Prisma.Decimal; unit: string }> = [];
+    if (calculationMode === 'GLOBAL') {
+      for (const hypothesis of params.hypotheses) {
+        const param = hypothesis.parameter.trim().toLowerCase();
+        let value: Prisma.Decimal;
+        try {
+          value = new Prisma.Decimal(hypothesis.value);
+        } catch {
+          continue;
+        }
+
+        if (param === 'revenue_growth' || param === 'export_growth') {
+          if (hypothesis.unit === '%') {
+            revenuePctChange = revenuePctChange.plus(value);
+          } else if (hypothesis.unit === 'FCFA') {
+            revenueDelta = revenueDelta.plus(value);
+          } else if (hypothesis.unit === 'multiplier') {
+            // Convertir le multiplicateur en taux équivalent : (m - 1) × 100
+            revenuePctChange = revenuePctChange.plus(
+              value.minus(new Prisma.Decimal('1')).mul(hundred),
+            );
+          }
+        } else if (param === 'cost_reduction') {
+          if (hypothesis.unit === '%') {
+            expensePctChange = expensePctChange.minus(value);
+          } else if (hypothesis.unit === 'FCFA') {
+            expenseDelta = expenseDelta.minus(value);
+          } else if (hypothesis.unit === 'multiplier') {
+            expensePctChange = expensePctChange.minus(
+              new Prisma.Decimal('1').minus(value).mul(hundred),
+            );
+          }
+        } else if (param === 'payroll_increase' || param === 'defect_rate') {
+          if (hypothesis.unit === '%') {
+            expensePctChange = expensePctChange.plus(value);
+          } else if (hypothesis.unit === 'FCFA') {
+            expenseDelta = expenseDelta.plus(value);
+          }
+        } else if (param === 'capex_increase') {
+          if (hypothesis.unit === '%') {
+            capexDelta = capexDelta.plus(baseCapex.mul(value).div(hundred));
+          } else if (hypothesis.unit === 'FCFA') {
+            capexDelta = capexDelta.plus(value);
+          }
+        } else if (param === 'dso_change' || param === 'dpo_change') {
+          dsoDpoBatch.push({ param, value, unit: hypothesis.unit });
         }
       }
 
-      if (param === 'cost_reduction') {
-        if (hypothesis.unit === '%') {
-          expenses = expenses.mul(new Prisma.Decimal('1').minus(value.div(new Prisma.Decimal('100'))));
-        } else if (hypothesis.unit === 'FCFA') {
-          const reduced = expenses.minus(value);
-          expenses = reduced.lt(new Prisma.Decimal('0')) ? new Prisma.Decimal('0') : reduced;
-        } else if (hypothesis.unit === 'multiplier') {
-          expenses = expenses.mul(value);
+      // Application simultanée de tous les taux sur la BASE (aucun effet cascade)
+      revenue = baseRevenue
+        .mul(new Prisma.Decimal('1').plus(revenuePctChange.div(hundred)))
+        .plus(revenueDelta);
+
+      const netExpenseFactor = new Prisma.Decimal('1').plus(expensePctChange.div(hundred));
+      expenses = baseExpenses
+        .mul(netExpenseFactor.lt(zero) ? zero : netExpenseFactor)
+        .plus(expenseDelta);
+      if (expenses.lt(zero)) expenses = zero;
+
+      capex = baseCapex.plus(capexDelta);
+    } else {
+      const adjustedLines = lines.map((line) => ({
+        ...line,
+        amount_budget: new Prisma.Decimal(line.amount_budget),
+      }));
+
+      const lineMatchesTarget = (
+        line: { line_type: LineType; account_code: string },
+        target: { lineTypes?: LineType[]; prefixes?: string[] },
+      ) => {
+        if (target.lineTypes?.length && !target.lineTypes.includes(line.line_type)) {
+          return false;
+        }
+        if (target.prefixes?.length) {
+          return target.prefixes.some((prefix) => line.account_code.startsWith(prefix));
+        }
+        return true;
+      };
+
+      for (const hypothesis of params.hypotheses) {
+        const param = hypothesis.parameter.trim().toLowerCase();
+        let value: Prisma.Decimal;
+        try {
+          value = new Prisma.Decimal(hypothesis.value);
+        } catch {
+          continue;
+        }
+
+        if (param === 'dso_change' || param === 'dpo_change') {
+          dsoDpoBatch.push({ param, value, unit: hypothesis.unit });
+          continue;
+        }
+
+        const target = TARGETED_HYPOTHESIS_MAP[param];
+        if (!target) {
+          continue;
+        }
+
+        for (const line of adjustedLines) {
+          if (!lineMatchesTarget(line, target)) {
+            continue;
+          }
+
+          const current = line.amount_budget;
+          let next = current;
+
+          if (hypothesis.unit === '%') {
+            const factor = value.div(hundred);
+            next = target.inverse
+              ? current.mul(new Prisma.Decimal('1').minus(factor))
+              : current.mul(new Prisma.Decimal('1').plus(factor));
+          } else if (hypothesis.unit === 'FCFA') {
+            next = target.inverse ? current.minus(value) : current.plus(value);
+          } else if (hypothesis.unit === 'multiplier') {
+            next = current.mul(value);
+          }
+
+          line.amount_budget = next.lt(zero) ? zero : next;
         }
       }
 
-      if (param === 'capex_increase') {
-        if (hypothesis.unit === '%') {
-          capex = capex.mul(new Prisma.Decimal('1').plus(value.div(new Prisma.Decimal('100'))));
-        } else if (hypothesis.unit === 'FCFA') {
-          capex = capex.plus(value);
-        } else if (hypothesis.unit === 'multiplier') {
-          capex = capex.mul(value);
-        }
+      revenue = adjustedLines
+        .filter((line) => line.line_type === LineType.REVENUE)
+        .reduce((sum, line) => sum.plus(line.amount_budget), new Prisma.Decimal('0'));
+      expenses = adjustedLines
+        .filter((line) => line.line_type === LineType.EXPENSE)
+        .reduce((sum, line) => sum.plus(line.amount_budget), new Prisma.Decimal('0'));
+      capex = adjustedLines
+        .filter((line) => line.line_type === LineType.CAPEX)
+        .reduce((sum, line) => sum.plus(line.amount_budget), new Prisma.Decimal('0'));
+    }
+
+    // DSO / DPO calculés sur les valeurs finales projetées
+    for (const h of dsoDpoBatch) {
+      if (h.param === 'dso_change' && h.unit === 'jours') {
+        receivablesDelta = receivablesDelta.plus(revenue.div(thirty).mul(h.value));
+      }
+      if (h.param === 'dpo_change' && h.unit === 'jours') {
+        payablesDelta = payablesDelta.plus(expenses.div(thirty).mul(h.value));
       }
     }
 
     const ebitda = revenue.minus(expenses);
-    const net = ebitda.minus(capex);
+    // IS (Impôt sur Sociétés) — taux 20 % sur EBITDA positif ; CAPEX en CF investing
+    const IS_RATE = new Prisma.Decimal('0.20');
+    const isTax = ebitda.gt(zero) ? ebitda.mul(IS_RATE) : zero;
+    const net = ebitda.minus(isTax);
 
     const toMoney = (d: Prisma.Decimal) => d.toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP);
     const totalExpenses = expenses.plus(capex);
-    const assets = revenue.mul(new Prisma.Decimal('0.6'));
-    const liabilities = totalExpenses.mul(new Prisma.Decimal('0.45'));
+    const assets = revenue.mul(new Prisma.Decimal('0.6')).plus(receivablesDelta);
+    const liabilities = totalExpenses.mul(new Prisma.Decimal('0.45')).plus(payablesDelta);
+    const cfOperating = ebitda.minus(receivablesDelta).plus(payablesDelta);
 
     return {
       period_id: periodId,
@@ -265,9 +427,9 @@ export class ScenariosRepository {
       bs_assets: toMoney(assets),
       bs_liabilities: toMoney(liabilities),
       bs_equity: toMoney(assets.minus(liabilities)),
-      cf_operating: toMoney(ebitda),
+      cf_operating: toMoney(cfOperating),
       cf_investing: toMoney(capex.negated()),
-      cf_financing: new Prisma.Decimal('0'),
+      cf_financing: toMoney(zero),
     };
   }
 

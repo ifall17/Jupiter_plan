@@ -57,12 +57,8 @@ export class ImportsController {
         }),
     )
     file: Express.Multer.File,
-    @Body('period_id') periodId: string,
+    @Body('period_id') periodId?: string,
   ) {
-    if (!periodId) {
-      throw importBadRequest('IMPORT_PERIOD_REQUIRED', 'period_id is required');
-    }
-
     const user = this.getCurrentUser(req);
     const job = await this.importsService.processImport(file, periodId, user.org_id, user.sub, this.getClientIp(req));
     return job;

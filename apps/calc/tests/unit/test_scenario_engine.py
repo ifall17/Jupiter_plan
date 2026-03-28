@@ -78,3 +78,78 @@ class TestScenarioEngine:
             hypotheses=[{'parameter': 'is_revenue', 'value': Decimal('33.333333'), 'unit': '%'}],
         )
         assert isinstance(result['is_revenue'], Decimal)
+
+    @pytest.mark.unit
+    def test_apply_hypotheses_targets_only_matching_accounts(self, engine):
+        budget_lines = [
+            {'account_code': '701100', 'line_type': 'REVENUE', 'amount_budget': '1000.00'},
+            {'account_code': '701200', 'line_type': 'REVENUE', 'amount_budget': '500.00'},
+            {'account_code': '641000', 'line_type': 'EXPENSE', 'amount_budget': '300.00'},
+            {'account_code': '625000', 'line_type': 'EXPENSE', 'amount_budget': '200.00'},
+        ]
+
+        adjusted = engine.apply_hypotheses(
+            budget_lines,
+            [
+                {'parameter': 'revenue_growth', 'value': '10', 'unit': '%'},
+                {'parameter': 'export_growth', 'value': '20', 'unit': '%'},
+                {'parameter': 'payroll_increase', 'value': '10', 'unit': '%'},
+            ],
+        )
+
+        by_code = {line['account_code']: Decimal(str(line['amount_budget'])) for line in adjusted}
+
+        # 701100: +10% only (revenue_growth)
+        assert by_code['701100'] == Decimal('1100.00')
+        # 701200: +10% then +20% (both target this line)
+        assert by_code['701200'] == Decimal('660.00')
+        # payroll account targeted
+        assert by_code['641000'] == Decimal('330.00')
+        # non-targeted expense untouched
+        assert by_code['625000'] == Decimal('200.00')
+
+    @pytest.mark.unit
+    def test_compute_net_result_uses_30_percent_is(self, engine):
+        net = engine.compute_net_result(
+            xg=Decimal('1000.00'),
+            xh=Decimal('0.00'),
+            rq=Decimal('0.00'),
+        )
+
+        assert net['is_amount'] == '300.00'
+        assert net['XI'] == '700.00'
+        assert net['taux_is'] == '30%'
+
+    @pytest.mark.unit
+    @pytest.mark.asyncio
+    async def test_calculate_scenario_applies_dso_dpo_only_to_bs_cf(self, engine):
+        budget_lines = [
+            {'account_code': '701200', 'line_type': 'REVENUE', 'amount_budget': '1000.00'},
+            {'account_code': '601000', 'line_type': 'EXPENSE', 'amount_budget': '400.00'},
+            {'account_code': '625000', 'line_type': 'EXPENSE', 'amount_budget': '100.00'},
+        ]
+
+        hypotheses = [
+            {'parameter': 'dso_change', 'value': '45', 'unit': 'jours'},
+            {'parameter': 'dpo_change', 'value': '30', 'unit': 'jours'},
+        ]
+
+        result = await engine.calculate_scenario(
+            budget_lines=budget_lines,
+            hypotheses=hypotheses,
+            cash_flow_plans=[],
+            org_id='org-1',
+        )
+
+        summary = result['summary']
+        snapshots = result['snapshots']
+
+        # DSO/DPO do not alter IS summary revenue/expenses/ebitda
+        assert summary['revenue'] == '1000.00'
+        assert summary['expenses'] == '500.00'
+        assert summary['ebitda'] == '500.00'
+
+        # DSO/DPO impact BI/EC and ZB
+        assert snapshots['bs_data']['actif']['BI'] == '123.29'
+        assert snapshots['bs_data']['passif']['EC'] == '32.88'
+        assert 'ZB' in snapshots['cf_data']['lines']

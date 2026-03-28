@@ -132,6 +132,7 @@ export default function DashboardPage() {
 
   const {
     period,
+    kpis,
     alerts,
     is_summary,
     variance_pct,
@@ -149,6 +150,14 @@ export default function DashboardPage() {
   const monthlyChartData = monthlyData?.monthly ?? [];
   const expensesByDept = monthlyData?.expensesByDept ?? [];
   const budgetVsActualByDept = monthlyData?.budgetVsActualByDept ?? [];
+
+  const kpiByCode = new Map(kpis.map((kpi) => [kpi.kpi_code, Number(kpi.value) || 0]));
+  const revenueValue = Number(is_summary.revenue) || kpiByCode.get('CA') || 0;
+  const ebitdaValue = Number(is_summary.ebitda) || kpiByCode.get('EBITDA') || 0;
+  const netValue = Number(is_summary.net) || 0;
+  const ebitdaMarginValue =
+    Number(is_summary.ebitda_margin) ||
+    (revenueValue > 0 ? Number(((ebitdaValue / revenueValue) * 100).toFixed(2)) : 0);
 
   return (
     <div className="dashboard-page">
@@ -175,7 +184,7 @@ export default function DashboardPage() {
       <div className="kpi-row" data-testid="kpi-row">
         <KpiCard
           label="Chiffre d'Affaires"
-          value={formatFCFA(Number(is_summary.revenue) || 0)}
+          value={formatFCFA(revenueValue)}
           trend={is_summary.revenue_trend}
           color="terra"
           testId="kpi-CA"
@@ -183,8 +192,8 @@ export default function DashboardPage() {
         />
         <KpiCard
           label="EBITDA"
-          value={formatFCFA(Number(is_summary.ebitda) || 0)}
-          subtitle={`Marge ${is_summary.ebitda_margin}%`}
+          value={formatFCFA(ebitdaValue)}
+          subtitle={`Marge ${ebitdaMarginValue}%`}
           trend={is_summary.ebitda_trend}
           color="gold"
           testId="kpi-EBITDA"
@@ -192,7 +201,7 @@ export default function DashboardPage() {
         />
         <KpiCard
           label="Résultat Net"
-          value={formatFCFA(Number(is_summary.net) || 0)}
+          value={formatFCFA(netValue)}
           trend={is_summary.net_trend}
           color="kola"
           testId="kpi-MARGE"

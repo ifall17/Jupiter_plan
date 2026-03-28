@@ -24,6 +24,7 @@ import { ScenariosService, ScenarioCurrentUser } from './scenarios.service';
 import { CreateScenarioDto } from './dto/create-scenario.dto';
 import { AddHypothesisDto } from './dto/add-hypothesis.dto';
 import { CompareScenariosDto } from './dto/compare-scenarios.dto';
+import { CalculateScenarioDto } from './dto/calculate-scenario.dto';
 import { ScenarioResponseDto } from './dto/scenario-response.dto';
 
 @Controller('scenarios')
@@ -79,8 +80,12 @@ export class ScenariosController {
   @HttpCode(202)
   @Roles(UserRole.SUPER_ADMIN, UserRole.FPA)
   @UseGuards(JwtAuthGuard, RolesGuard, OrgGuard)
-  async calculate(@Req() req: Request, @Param('id') id: string): Promise<{ scenario_id: string; status: 'PROCESSING' }> {
-    return this.scenariosService.calculateScenario(this.getCurrentUser(req), id);
+  async calculate(
+    @Req() req: Request,
+    @Param('id') id: string,
+    @Body() dto: CalculateScenarioDto,
+  ): Promise<{ scenario_id: string; status: 'PROCESSING' }> {
+    return this.scenariosService.calculateScenario(this.getCurrentUser(req), id, dto);
   }
 
   @Post(':id/save')

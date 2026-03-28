@@ -228,3 +228,29 @@ export function belongsToBalanceSheet(accountCode: string): boolean {
 export function belongsToIncomeStatement(accountCode: string): boolean {
   return resolveSyscohadaFinancialMapping(accountCode)?.statement === 'INCOME_STATEMENT';
 }
+
+/**
+ * Préfixes SYSCOHADA centralisés pour les calculs KPI.
+ * Source de vérité unique — aligne kpis.service.ts avec le moteur Python (syscohada_mapping.py).
+ *
+ * CA (XB) = ventes directes (comptes 70x uniquement, hors subventions/produits financiers)
+ * CHARGES  = toute la classe 6
+ * ACHATS   = matières et marchandises (601, 602)
+ * MASSE_SALARIALE = charges de personnel (65x selon SYSCOHADA Sénégal, aussi 64x ancienne numérotation)
+ * OPEX     = charges externes, impôts, personnel, autres charges d'exploitation
+ * AMORT    = dotations aux amortissements et provisions
+ */
+export const KPI_ACCOUNT_PREFIXES = {
+  /** Chiffre d'affaires : comptes 70x (Ventes) */
+  CA: ['70'] as const,
+  /** Toutes les charges d'exploitation : classe 6 */
+  CHARGES: ['6'] as const,
+  /** Achats de marchandises et matières premières */
+  ACHATS: ['601', '602'] as const,
+  /** Charges de personnel */
+  MASSE_SALARIALE: ['64', '65'] as const,
+  /** Charges opérationnelles (hors achats et amortissements) */
+  OPEX: ['62', '63', '64', '65'] as const,
+  /** Dotations amortissements et provisions */
+  AMORT: ['68'] as const,
+} as const;

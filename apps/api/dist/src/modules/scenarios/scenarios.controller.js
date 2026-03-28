@@ -24,6 +24,7 @@ const scenarios_service_1 = require("./scenarios.service");
 const create_scenario_dto_1 = require("./dto/create-scenario.dto");
 const add_hypothesis_dto_1 = require("./dto/add-hypothesis.dto");
 const compare_scenarios_dto_1 = require("./dto/compare-scenarios.dto");
+const calculate_scenario_dto_1 = require("./dto/calculate-scenario.dto");
 let ScenariosController = class ScenariosController {
     constructor(scenariosService) {
         this.scenariosService = scenariosService;
@@ -46,8 +47,8 @@ let ScenariosController = class ScenariosController {
     async upsertHypotheses(req, id, dto) {
         return this.scenariosService.addHypotheses(this.getCurrentUser(req), id, dto);
     }
-    async calculate(req, id) {
-        return this.scenariosService.calculateScenario(this.getCurrentUser(req), id);
+    async calculate(req, id, dto) {
+        return this.scenariosService.calculateScenario(this.getCurrentUser(req), id, dto);
     }
     async save(req, id) {
         return this.scenariosService.saveScenario(this.getCurrentUser(req), id, this.extractIp(req));
@@ -134,8 +135,9 @@ __decorate([
     (0, common_1.UseGuards)(jwt_auth_guard_1.JwtAuthGuard, roles_guard_1.RolesGuard, org_guard_1.OrgGuard),
     __param(0, (0, common_1.Req)()),
     __param(1, (0, common_1.Param)('id')),
+    __param(2, (0, common_1.Body)()),
     __metadata("design:type", Function),
-    __metadata("design:paramtypes", [Object, String]),
+    __metadata("design:paramtypes", [Object, String, calculate_scenario_dto_1.CalculateScenarioDto]),
     __metadata("design:returntype", Promise)
 ], ScenariosController.prototype, "calculate", null);
 __decorate([

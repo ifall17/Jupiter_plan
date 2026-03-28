@@ -10,6 +10,9 @@ describe('DashboardService', () => {
     let kpisRepository;
     let alertsRepository;
     let snapshotsRepository;
+    let httpService;
+    let configService;
+    let syscohadaMappingService;
     const currentUser = {
         sub: 'user-1',
         org_id: 'org-1',
@@ -18,8 +21,18 @@ describe('DashboardService', () => {
     };
     beforeEach(() => {
         prisma = {
+            fiscalYear: {
+                findFirst: jest.fn(),
+            },
             period: {
                 findFirst: jest.fn(),
+                findMany: jest.fn(),
+            },
+            transaction: {
+                findMany: jest.fn(),
+            },
+            budgetLine: {
+                findMany: jest.fn(),
             },
         };
         redis = {
@@ -42,7 +55,16 @@ describe('DashboardService', () => {
             findVarianceByReferenceBudget: jest.fn(),
             findRunwayWeeks: jest.fn(),
         };
-        service = new dashboard_service_1.DashboardService(prisma, redis, kpisRepository, alertsRepository, snapshotsRepository);
+        httpService = {
+            post: jest.fn(),
+        };
+        configService = {
+            get: jest.fn(),
+        };
+        syscohadaMappingService = {
+            resolveReportLineTypes: jest.fn(),
+        };
+        service = new dashboard_service_1.DashboardService(prisma, redis, kpisRepository, alertsRepository, snapshotsRepository, httpService, configService, syscohadaMappingService);
         prisma.period.findFirst.mockResolvedValue({
             id: 'period-1',
             fiscal_year_id: 'fy-1',
@@ -133,8 +155,8 @@ describe('DashboardService', () => {
         redis.del.mockResolvedValue(1);
         redis.delByPattern.mockResolvedValue(1);
         await service.invalidateCacheAfterTransactionValidation('org-1', 'period-1');
-        expect(redis.del).toHaveBeenCalledWith('dashboard:org-1:period-1');
-        expect(redis.delByPattern).toHaveBeenCalledWith('dashboard:org-1:AGG:*');
+        expect(redis.del).toHaveBeenCalledWith('dashboard:v2:org-1:period-1');
+        expect(redis.delByPattern).toHaveBeenCalledWith('dashboard:v2:org-1:AGG:*');
     });
     it('should aggregate all dashboard data in single response', async () => {
         redis.get.mockResolvedValue(null);
@@ -149,7 +171,7 @@ describe('DashboardService', () => {
         redis.get.mockResolvedValue(null);
         redis.set.mockResolvedValue('OK');
         await service.getDashboard(currentUser, 'period-1');
-        expect(redis.set).toHaveBeenCalledWith('dashboard:org-1:period-1', expect.any(String), 'EX', 300);
+        expect(redis.set).toHaveBeenCalledWith('dashboard:v2:org-1:period-1', expect.any(String), 'EX', 300);
     });
     it('should return alerts sorted by severity then date', async () => {
         redis.get.mockResolvedValue(null);
@@ -169,6 +191,46 @@ describe('DashboardService', () => {
         expect(Array.isArray(result.variance_pct)).toBe(true);
         expect(typeof result.runway_weeks).toBe('string');
         expect(typeof result.ca_trend[0].value).toBe('string');
+    });
+    it('should exclude unvalidated transactions from monthly calculations', async () => {
+        prisma.fiscalYear.findFirst.mockResolvedValue({ id: 'fy-1' });
+        prisma.period.findMany.mockResolvedValue([
+            { id: 'period-1', period_number: 1 },
+        ]);
+        prisma.transaction.findMany.mockImplementation(async (args) => {
+            const where = args?.where;
+            const hasValidatedFilter = where && 'is_validated' in where && where.is_validated === true;
+            if (where && 'amount' in where) {
+                return (hasValidatedFilter
+                    ? [{ amount: new client_1.Prisma.Decimal('-200'), department: 'Sales' }]
+                    : [
+                        { amount: new client_1.Prisma.Decimal('-200'), department: 'Sales' },
+                        { amount: new client_1.Prisma.Decimal('-900'), department: 'Ops' },
+                    ]);
+            }
+            return (hasValidatedFilter
+                ? [
+                    { period_id: 'period-1', amount: new client_1.Prisma.Decimal('500'), department: 'Sales' },
+                    { period_id: 'period-1', amount: new client_1.Prisma.Decimal('-200'), department: 'Sales' },
+                ]
+                : [
+                    { period_id: 'period-1', amount: new client_1.Prisma.Decimal('500'), department: 'Sales' },
+                    { period_id: 'period-1', amount: new client_1.Prisma.Decimal('-200'), department: 'Sales' },
+                    { period_id: 'period-1', amount: new client_1.Prisma.Decimal('9000'), department: 'Ops' },
+                ]);
+        });
+        prisma.budgetLine.findMany.mockResolvedValue([]);
+        const result = await service.getMonthlyData('org-1');
+        expect(result.monthly).toEqual([
+            { month: 'Jan', revenue: 500, expenses: 200, ebitda: 300 },
+        ]);
+        expect(result.expensesByDept).toEqual([{ name: 'Sales', value: 200 }]);
+        expect(prisma.transaction.findMany).toHaveBeenNthCalledWith(1, expect.objectContaining({
+            where: expect.objectContaining({ is_validated: true }),
+        }));
+        expect(prisma.transaction.findMany).toHaveBeenNthCalledWith(2, expect.objectContaining({
+            where: expect.objectContaining({ is_validated: true }),
+        }));
     });
 });
 //# sourceMappingURL=dashboard.service.spec.js.map

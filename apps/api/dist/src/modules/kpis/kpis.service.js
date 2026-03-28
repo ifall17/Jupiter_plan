@@ -14,12 +14,16 @@ exports.KpisService = void 0;
 const common_1 = require("@nestjs/common");
 const client_1 = require("@prisma/client");
 const business_constants_1 = require("../../common/constants/business.constants");
+const syscohada_financial_mapping_1 = require("../../common/constants/syscohada-financial-mapping");
+const calc_engine_client_1 = require("../../common/services/calc-engine.client");
 const prisma_service_1 = require("../../prisma/prisma.service");
 const redis_service_1 = require("../../redis/redis.service");
+const TAUX_IS_SENEGAL = 0.30;
 let KpisService = KpisService_1 = class KpisService {
-    constructor(prisma, redisService) {
+    constructor(prisma, redisService, calcEngineClient) {
         this.prisma = prisma;
         this.redisService = redisService;
+        this.calcEngineClient = calcEngineClient;
         this.logger = new common_1.Logger(KpisService_1.name);
     }
     async listActiveKpis(currentUser) {
@@ -137,7 +141,7 @@ let KpisService = KpisService_1 = class KpisService {
         }
         const [transactions, budgetLines, cfPlans] = await Promise.all([
             this.prisma.transaction.findMany({
-                where: { org_id: orgId, period_id: periodId },
+                where: { org_id: orgId, period_id: periodId, is_validated: true },
                 select: { account_code: true, amount: true },
             }),
             this.prisma.budgetLine.findMany({
@@ -157,21 +161,55 @@ let KpisService = KpisService_1 = class KpisService {
         const weeksQuarter = new client_1.Prisma.Decimal('13');
         const absDecimal = (value) => (value.lt(zero) ? value.neg() : value);
         const startsWithAny = (accountCode, prefixes) => prefixes.some((prefix) => accountCode.startsWith(prefix));
+        const parseDecimal = (value) => {
+            if (value === undefined)
+                return zero;
+            try {
+                return value instanceof client_1.Prisma.Decimal ? value : new client_1.Prisma.Decimal(value);
+            }
+            catch {
+                return zero;
+            }
+        };
         const sumTransactions = (predicate, absolute = true) => transactions.reduce((sum, tx) => {
             if (!predicate(tx))
                 return sum;
             return sum.plus(absolute ? absDecimal(tx.amount) : tx.amount);
         }, zero);
-        const ca = sumTransactions((tx) => startsWithAny(tx.account_code, ['7']) || tx.amount.gt(zero));
-        const charges = sumTransactions((tx) => startsWithAny(tx.account_code, ['6']) || tx.amount.lt(zero));
-        const purchases = sumTransactions((tx) => startsWithAny(tx.account_code, ['601', '602']));
-        const payroll = sumTransactions((tx) => startsWithAny(tx.account_code, ['64']));
-        const opex = sumTransactions((tx) => startsWithAny(tx.account_code, ['62', '63', '64', '65']));
+        let ca = sumTransactions((tx) => startsWithAny(tx.account_code, [...syscohada_financial_mapping_1.KPI_ACCOUNT_PREFIXES.CA]));
+        let ebitda = ca.minus(sumTransactions((tx) => startsWithAny(tx.account_code, [...syscohada_financial_mapping_1.KPI_ACCOUNT_PREFIXES.CHARGES])));
+        let netResult = zero;
+        try {
+            const fs = await this.calcEngineClient.post('/reports/financial-statements', {
+                transactions: transactions.map((tx) => ({
+                    account_code: tx.account_code,
+                    amount: tx.amount.toString(),
+                })),
+                cash_flow_plans: cfPlans.map((plan) => ({
+                    direction: plan.direction,
+                    amount: plan.amount.toString(),
+                    inflow: plan.inflow.toString(),
+                    outflow: plan.outflow.toString(),
+                })),
+            });
+            const lines = fs.is_data?.lines;
+            if (lines) {
+                ca = parseDecimal(lines.XB);
+                ebitda = parseDecimal(lines.XD);
+                netResult = parseDecimal(lines.XI);
+            }
+        }
+        catch (error) {
+            this.logger.warn(`Fallback calcul local KPIs (CalcEngine indisponible) - org: ${orgId}, period: ${periodId}, reason: ${error.message}`);
+        }
+        const charges = ca.minus(ebitda);
+        const purchases = sumTransactions((tx) => startsWithAny(tx.account_code, [...syscohada_financial_mapping_1.KPI_ACCOUNT_PREFIXES.ACHATS]));
+        const payroll = sumTransactions((tx) => startsWithAny(tx.account_code, [...syscohada_financial_mapping_1.KPI_ACCOUNT_PREFIXES.MASSE_SALARIALE]));
+        const opex = sumTransactions((tx) => startsWithAny(tx.account_code, [...syscohada_financial_mapping_1.KPI_ACCOUNT_PREFIXES.OPEX]));
         const totalBudget = budgetLines.reduce((sum, line) => sum.plus(absDecimal(line.amount_budget)), zero);
-        const ebitda = ca.minus(charges);
         const marge = ca.gt(zero) ? ebitda.div(ca).mul(hundred) : zero;
         const grossMargin = ca.gt(zero) ? ca.minus(purchases).div(ca).mul(hundred) : zero;
-        const roe = totalBudget.gt(zero) ? ebitda.div(totalBudget).mul(hundred) : zero;
+        const roe = totalBudget.gt(zero) ? netResult.div(totalBudget).mul(hundred) : zero;
         const receivables = ca.mul(factorReceivables);
         const payables = purchases.mul(factorPayables);
         const dailyRevenue = ca.gt(zero) ? ca.div(days) : zero;
@@ -183,7 +221,8 @@ let KpisService = KpisService_1 = class KpisService {
         const opexRatio = ca.gt(zero) ? opex.div(ca).mul(hundred) : zero;
         const payrollRatio = ca.gt(zero) ? payroll.div(ca).mul(hundred) : zero;
         const operatingMargin = ca.gt(zero) ? ca.minus(charges).div(ca).mul(hundred) : zero;
-        const roa = totalBudget.gt(zero) ? ebitda.div(totalBudget).mul(hundred) : zero;
+        const netMargin = ca.gt(zero) ? netResult.div(ca).mul(hundred) : zero;
+        const roa = totalBudget.gt(zero) ? netResult.div(totalBudget).mul(hundred) : zero;
         const roce = totalBudget.gt(zero) ? ebitda.div(totalBudget).mul(hundred) : zero;
         const sumFlowByDirection = (direction) => cfPlans.reduce((sum, plan) => {
             if (plan.direction !== direction)
@@ -215,7 +254,7 @@ let KpisService = KpisService_1 = class KpisService {
             GROSS_MARGIN: grossMargin,
             EBITDA_MARGIN: marge,
             OPERATING_MARGIN: operatingMargin,
-            NET_MARGIN: marge,
+            NET_MARGIN: netMargin,
             ROE: roe,
             ROA: roa,
             DPO: dpo,
@@ -250,6 +289,23 @@ let KpisService = KpisService_1 = class KpisService {
                     calculated_at: new Date(),
                 },
             });
+            await this.prisma.alert.deleteMany({
+                where: { org_id: orgId, kpi_id: kpiDef.id, period_id: periodId },
+            });
+            if (severity !== client_1.AlertSeverity.INFO) {
+                const threshold = severity === client_1.AlertSeverity.CRITICAL ? kpiDef.threshold_critical : kpiDef.threshold_warn;
+                const seuilLabel = severity === client_1.AlertSeverity.CRITICAL ? 'seuil critique' : "seuil d'alerte";
+                await this.prisma.alert.create({
+                    data: {
+                        org_id: orgId,
+                        kpi_id: kpiDef.id,
+                        period_id: periodId,
+                        severity,
+                        message: `${kpiDef.label} : valeur calculée = ${decimalValue} ${kpiDef.unit}${threshold !== null ? ` (${seuilLabel} : ${threshold})` : ''}`,
+                        is_read: false,
+                    },
+                });
+            }
             calculatedCodes.push(kpiDef.code);
         }
         await this.invalidateCacheForPeriod(orgId, periodId);
@@ -317,10 +373,113 @@ let KpisService = KpisService_1 = class KpisService {
                 }
             }
         }
+        try {
+            const calcLines = await this.getCalcIncomeStatementLinesForPeriods(currentUser.org_id, periodIds);
+            if (calcLines) {
+                const zero = new client_1.Prisma.Decimal('0');
+                const hundred = new client_1.Prisma.Decimal('100');
+                const toDecimal = (value) => {
+                    if (!value)
+                        return zero;
+                    try {
+                        return new client_1.Prisma.Decimal(value);
+                    }
+                    catch {
+                        return zero;
+                    }
+                };
+                const ca = toDecimal(calcLines.XB);
+                const ebitda = toDecimal(calcLines.XD);
+                const operating = toDecimal(calcLines.XE);
+                const net = toDecimal(calcLines.XI);
+                const achats = toDecimal(calcLines.RA);
+                const charges = ca.minus(ebitda);
+                const ebitdaMargin = ca.gt(zero) ? ebitda.div(ca).mul(hundred) : zero;
+                const netMargin = ca.gt(zero) ? net.div(ca).mul(hundred) : zero;
+                const operatingMargin = ca.gt(zero) ? operating.div(ca).mul(hundred) : zero;
+                const grossMargin = ca.gt(zero) ? ca.minus(achats).div(ca).mul(hundred) : zero;
+                const applyOverride = (code, value) => {
+                    const entry = result.find((r) => r.kpi_code === code);
+                    if (!entry)
+                        return;
+                    entry.value = value.toDecimalPlaces(2, client_1.Prisma.Decimal.ROUND_HALF_UP).toString();
+                    const kpiVals = byCode.get(code);
+                    if (kpiVals?.length) {
+                        entry.severity = this.computeKpiSeverity(kpiVals[0].kpi, value);
+                    }
+                };
+                applyOverride('CA', ca);
+                applyOverride('EBITDA', ebitda);
+                applyOverride('CHARGES', charges);
+                applyOverride('MARGE', ebitdaMargin);
+                applyOverride('MARGE_EBITDA', ebitdaMargin);
+                applyOverride('EBITDA_MARGIN', ebitdaMargin);
+                applyOverride('NET_MARGIN', netMargin);
+                applyOverride('OPERATING_MARGIN', operatingMargin);
+                applyOverride('GROSS_MARGIN', grossMargin);
+            }
+        }
+        catch (error) {
+            this.logger.warn(`Fallback aggregation KPIs locale (CalcEngine indisponible) - org: ${currentUser.org_id}, periods: [${periodIds.join(',')}], reason: ${error.message}`);
+        }
         return result.sort((a, b) => {
             const rank = { CRITICAL: 3, WARN: 2, INFO: 1 };
             return (rank[b.severity] ?? 0) - (rank[a.severity] ?? 0);
         });
+    }
+    async getCalcIncomeStatementLinesForPeriods(orgId, periodIds) {
+        if (periodIds.length === 0)
+            return null;
+        const [transactions, cashFlowPlans] = await Promise.all([
+            this.prisma.transaction.findMany({
+                where: {
+                    org_id: orgId,
+                    period_id: { in: periodIds },
+                    is_validated: true,
+                },
+                select: {
+                    account_code: true,
+                    account_label: true,
+                    department: true,
+                    amount: true,
+                    is_validated: true,
+                    period: { select: { start_date: true } },
+                },
+            }),
+            this.prisma.cashFlowPlan.findMany({
+                where: { org_id: orgId, period_id: { in: periodIds } },
+                select: {
+                    direction: true,
+                    amount: true,
+                    flow_type: true,
+                    label: true,
+                    planned_date: true,
+                },
+            }),
+        ]);
+        if (transactions.length === 0)
+            return null;
+        const fs = await this.calcEngineClient.post('/reports/financial-statements', {
+            transactions: transactions.map((tx) => ({
+                account_code: tx.account_code,
+                account_label: tx.account_label,
+                department: tx.department,
+                line_type: tx.amount.gt(0) ? 'REVENUE' : 'EXPENSE',
+                amount: tx.amount.toString(),
+                transaction_date: tx.period.start_date.toISOString(),
+                is_validated: tx.is_validated,
+                label: tx.account_label,
+            })),
+            cash_flow_plans: cashFlowPlans.map((plan) => ({
+                direction: plan.direction,
+                amount: plan.amount.toString(),
+                flow_type: plan.flow_type,
+                label: plan.label,
+                planned_date: (plan.planned_date ?? new Date()).toISOString(),
+            })),
+            snapshot: {},
+        });
+        return fs.is_data?.lines ?? null;
     }
     async resolvePeriodIds(orgId, params) {
         if (params.periodId) {
@@ -688,6 +847,7 @@ exports.KpisService = KpisService;
 exports.KpisService = KpisService = KpisService_1 = __decorate([
     (0, common_1.Injectable)(),
     __metadata("design:paramtypes", [prisma_service_1.PrismaService,
-        redis_service_1.RedisService])
+        redis_service_1.RedisService,
+        calc_engine_client_1.CalcEngineClient])
 ], KpisService);
 //# sourceMappingURL=kpis.service.js.map

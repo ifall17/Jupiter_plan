@@ -23,6 +23,7 @@ describe('ScenariosService', () => {
         name: 'Base Scenario',
         type: client_1.ScenarioType.BASE,
         status: client_1.ScenarioStatus.DRAFT,
+        calculation_mode: 'GLOBAL',
         created_at: new Date(),
         hypotheses: [
             {
@@ -43,6 +44,9 @@ describe('ScenariosService', () => {
             isBudgetApproved: jest.fn(),
             replaceHypotheses: jest.fn(),
             updateStatus: jest.fn(),
+            updateCalculationMode: jest.fn(),
+            calculateSnapshotFromBudget: jest.fn(),
+            upsertScenarioSnapshot: jest.fn(),
             findManySavedByIds: jest.fn(),
             isReferencedInReport: jest.fn(),
             deleteScenario: jest.fn(),
@@ -95,10 +99,30 @@ describe('ScenariosService', () => {
         repository.isReferencedInReport.mockResolvedValue(true);
         await expect(service.deleteScenario(currentUser, draftScenario.id)).rejects.toBeInstanceOf(common_1.BadRequestException);
     });
-    it('should queue calculate job for DRAFT scenario', async () => {
+    it('should calculate snapshot for DRAFT scenario', async () => {
         repository.findByIdInOrg.mockResolvedValue(draftScenario);
+        repository.calculateSnapshotFromBudget.mockResolvedValue({
+            period_id: 'period-1',
+            is_revenue: new client_1.Prisma.Decimal('1000'),
+            is_expenses: new client_1.Prisma.Decimal('800'),
+            is_ebitda: new client_1.Prisma.Decimal('200'),
+            is_net: new client_1.Prisma.Decimal('160'),
+            bs_assets: new client_1.Prisma.Decimal('600'),
+            bs_liabilities: new client_1.Prisma.Decimal('300'),
+            bs_equity: new client_1.Prisma.Decimal('300'),
+            cf_operating: new client_1.Prisma.Decimal('180'),
+            cf_investing: new client_1.Prisma.Decimal('-50'),
+            cf_financing: new client_1.Prisma.Decimal('0'),
+        });
         const result = await service.calculateScenario(currentUser, draftScenario.id);
-        expect(calcQueue.add).toHaveBeenCalledWith('scenario-calculate', expect.objectContaining({ scenario_id: draftScenario.id, org_id: currentUser.org_id }), expect.any(Object));
+        expect(repository.calculateSnapshotFromBudget).toHaveBeenCalledWith(expect.objectContaining({
+            scenarioId: draftScenario.id,
+            orgId: currentUser.org_id,
+            budgetId: draftScenario.budget_id,
+            calculationMode: 'GLOBAL',
+        }));
+        expect(repository.updateCalculationMode).toHaveBeenCalledWith(draftScenario.id, currentUser.org_id, 'GLOBAL');
+        expect(repository.upsertScenarioSnapshot).toHaveBeenCalled();
         expect(result).toEqual({ scenario_id: draftScenario.id, status: 'PROCESSING' });
     });
     it('should throw NotFoundException when scenario is missing', async () => {

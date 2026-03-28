@@ -93,6 +93,11 @@ enum ScenarioStatus {
   SAVED
 }
 
+enum ScenarioCalculationMode {
+  GLOBAL
+  COMPTES_CIBLES
+}
+
 enum AccountType {
   BANK
   WAVE
@@ -441,7 +446,7 @@ model SyscohadaAccountMapping {
 model ImportJob {
   id            String       @id @default(uuid())
   org_id        String
-  period_id     String
+  period_id     String?
   created_by    String
   source        ImportSource
   status        ImportStatus @default(PENDING)
@@ -454,7 +459,7 @@ model ImportJob {
   completed_at  DateTime?
   created_at    DateTime     @default(now())
   organization  Organization @relation(fields: [org_id], references: [id])
-  period        Period       @relation(fields: [period_id], references: [id])
+  period        Period?      @relation(fields: [period_id], references: [id])
   creator       User         @relation(fields: [created_by], references: [id])
   transactions  Transaction[]
 
@@ -515,6 +520,7 @@ model Scenario {
   name         String
   type         ScenarioType
   status       ScenarioStatus @default(DRAFT)
+  calculation_mode ScenarioCalculationMode @default(GLOBAL)
   calculated_at DateTime?
   saved_at     DateTime?
   created_by   String

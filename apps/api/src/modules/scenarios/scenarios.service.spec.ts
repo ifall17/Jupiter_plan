@@ -26,6 +26,7 @@ describe('ScenariosService', () => {
     name: 'Base Scenario',
     type: ScenarioType.BASE,
     status: ScenarioStatus.DRAFT,
+    calculation_mode: 'GLOBAL',
     created_at: new Date(),
     hypotheses: [
       {
@@ -47,6 +48,9 @@ describe('ScenariosService', () => {
       isBudgetApproved: jest.fn(),
       replaceHypotheses: jest.fn(),
       updateStatus: jest.fn(),
+      updateCalculationMode: jest.fn(),
+      calculateSnapshotFromBudget: jest.fn(),
+      upsertScenarioSnapshot: jest.fn(),
       findManySavedByIds: jest.fn(),
       isReferencedInReport: jest.fn(),
       deleteScenario: jest.fn(),
@@ -137,19 +141,41 @@ describe('ScenariosService', () => {
     await expect(service.deleteScenario(currentUser, draftScenario.id)).rejects.toBeInstanceOf(BadRequestException);
   });
 
-  it('should queue calculate job for DRAFT scenario', async () => {
+  it('should calculate snapshot for DRAFT scenario', async () => {
     // Arrange
     repository.findByIdInOrg.mockResolvedValue(draftScenario as never);
+    repository.calculateSnapshotFromBudget.mockResolvedValue({
+      period_id: 'period-1',
+      is_revenue: new Prisma.Decimal('1000'),
+      is_expenses: new Prisma.Decimal('800'),
+      is_ebitda: new Prisma.Decimal('200'),
+      is_net: new Prisma.Decimal('160'),
+      bs_assets: new Prisma.Decimal('600'),
+      bs_liabilities: new Prisma.Decimal('300'),
+      bs_equity: new Prisma.Decimal('300'),
+      cf_operating: new Prisma.Decimal('180'),
+      cf_investing: new Prisma.Decimal('-50'),
+      cf_financing: new Prisma.Decimal('0'),
+    } as never);
 
     // Act
     const result = await service.calculateScenario(currentUser, draftScenario.id);
 
     // Assert
-    expect(calcQueue.add).toHaveBeenCalledWith(
-      'scenario-calculate',
-      expect.objectContaining({ scenario_id: draftScenario.id, org_id: currentUser.org_id }),
-      expect.any(Object),
+    expect(repository.calculateSnapshotFromBudget).toHaveBeenCalledWith(
+      expect.objectContaining({
+        scenarioId: draftScenario.id,
+        orgId: currentUser.org_id,
+        budgetId: draftScenario.budget_id,
+        calculationMode: 'GLOBAL',
+      }),
     );
+    expect(repository.updateCalculationMode).toHaveBeenCalledWith(
+      draftScenario.id,
+      currentUser.org_id,
+      'GLOBAL',
+    );
+    expect(repository.upsertScenarioSnapshot).toHaveBeenCalled();
     expect(result).toEqual({ scenario_id: draftScenario.id, status: 'PROCESSING' });
   });
 

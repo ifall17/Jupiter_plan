@@ -16,6 +16,7 @@ exports.DashboardController = void 0;
 const common_1 = require("@nestjs/common");
 const enums_1 = require("../../shared/enums");
 const roles_decorator_1 = require("../../common/decorators/roles.decorator");
+const current_user_decorator_1 = require("../../common/decorators/current-user.decorator");
 const jwt_auth_guard_1 = require("../../common/guards/jwt-auth.guard");
 const org_guard_1 = require("../../common/guards/org.guard");
 const roles_guard_1 = require("../../common/guards/roles.guard");
@@ -31,6 +32,16 @@ let DashboardController = class DashboardController {
     async getMonthly(req) {
         const currentUser = this.getCurrentUser(req);
         return this.dashboardService.getMonthlyData(currentUser.org_id);
+    }
+    async getFinancialStatements(periodId, ytd, quarter, fromPeriod, toPeriod, user) {
+        const quarterNumber = quarter ? Number.parseInt(quarter, 10) : undefined;
+        return this.dashboardService.getFinancialStatements(user.org_id, {
+            period_id: periodId,
+            ytd: ytd === 'true',
+            quarter: quarterNumber && !Number.isNaN(quarterNumber) ? quarterNumber : undefined,
+            from_period: fromPeriod,
+            to_period: toPeriod,
+        });
     }
     getCurrentUser(req) {
         const user = req.user;
@@ -64,6 +75,20 @@ __decorate([
     __metadata("design:paramtypes", [Object]),
     __metadata("design:returntype", Promise)
 ], DashboardController.prototype, "getMonthly", null);
+__decorate([
+    (0, common_1.Get)('financial-statements'),
+    (0, roles_decorator_1.Roles)(enums_1.UserRole.SUPER_ADMIN, enums_1.UserRole.FPA, enums_1.UserRole.LECTEUR),
+    (0, common_1.UseGuards)(jwt_auth_guard_1.JwtAuthGuard, roles_guard_1.RolesGuard, org_guard_1.OrgGuard),
+    __param(0, (0, common_1.Query)('period_id')),
+    __param(1, (0, common_1.Query)('ytd')),
+    __param(2, (0, common_1.Query)('quarter')),
+    __param(3, (0, common_1.Query)('from_period')),
+    __param(4, (0, common_1.Query)('to_period')),
+    __param(5, (0, current_user_decorator_1.CurrentUser)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, String, String, String, String, Object]),
+    __metadata("design:returntype", Promise)
+], DashboardController.prototype, "getFinancialStatements", null);
 exports.DashboardController = DashboardController = __decorate([
     (0, common_1.Controller)('dashboard'),
     __metadata("design:paramtypes", [dashboard_service_1.DashboardService])

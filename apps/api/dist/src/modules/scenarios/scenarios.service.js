@@ -69,6 +69,7 @@ let ScenariosService = class ScenariosService {
             budget_id: dto.budget_id,
             name: dto.name.trim(),
             type: dto.type,
+            calculation_mode: 'GLOBAL',
             created_by: currentUser.sub,
         });
         return this.toResponse(created, currentUser.role);
@@ -76,7 +77,10 @@ let ScenariosService = class ScenariosService {
     async addHypotheses(currentUser, scenarioId, dto) {
         const scenario = await this.ensureOwnedScenario(currentUser, scenarioId);
         if (scenario.status !== client_1.ScenarioStatus.DRAFT) {
-            throw new common_1.BadRequestException({ code: 'SCENARIO_NOT_EDITABLE' });
+            throw new common_1.BadRequestException({
+                code: 'SCENARIO_NOT_EDITABLE',
+                message: 'Les hypothèses ne peuvent être modifiées que pour un scénario en brouillon (DRAFT).',
+            });
         }
         await this.scenariosRepository.replaceHypotheses(scenario.id, currentUser.org_id, dto.hypotheses.map((hypothesis) => ({
             label: hypothesis.label.trim(),
@@ -87,16 +91,22 @@ let ScenariosService = class ScenariosService {
         const refreshed = await this.ensureOwnedScenario(currentUser, scenario.id);
         return this.toResponse(refreshed, currentUser.role);
     }
-    async calculateScenario(currentUser, scenarioId) {
+    async calculateScenario(currentUser, scenarioId, dto) {
         const scenario = await this.ensureOwnedScenario(currentUser, scenarioId);
         if (scenario.status !== client_1.ScenarioStatus.DRAFT) {
-            throw new common_1.BadRequestException({ code: 'SCENARIO_NOT_EDITABLE' });
+            throw new common_1.BadRequestException({
+                code: 'SCENARIO_NOT_EDITABLE',
+                message: 'Le scénario doit être en brouillon (DRAFT) pour lancer le calcul.',
+            });
         }
         await this.scenariosRepository.updateStatus(scenario.id, currentUser.org_id, client_1.ScenarioStatus.DRAFT);
+        const calculationMode = dto?.calculation_mode ?? scenario.calculation_mode ?? 'GLOBAL';
+        await this.scenariosRepository.updateCalculationMode(scenario.id, currentUser.org_id, calculationMode);
         const snapshot = await this.scenariosRepository.calculateSnapshotFromBudget({
             scenarioId: scenario.id,
             orgId: currentUser.org_id,
             budgetId: scenario.budget_id,
+            calculationMode,
             hypotheses: scenario.hypotheses.map((h) => ({
                 parameter: h.parameter,
                 value: h.value.toString(),
@@ -176,6 +186,7 @@ let ScenariosService = class ScenariosService {
             name: scenario.name,
             type: scenario.type,
             status: scenario.status,
+            calculation_mode: scenario.calculation_mode,
             budget_id: scenario.budget_id,
             hypotheses: role === enums_1.UserRole.LECTEUR
                 ? null

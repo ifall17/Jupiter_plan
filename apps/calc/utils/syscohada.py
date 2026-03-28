@@ -215,14 +215,14 @@ SYSCOHADA_MAPPINGS = sorted(
 
 
 def is_valid_syscohada(code: str) -> bool:
-    normalized = str(code).strip() if code is not None else ""
+    normalized = str(code).strip() if code is not None else "" #type: ignore
     if not re.match(r"^\d{6,8}$", normalized):
         return False
     return normalized[0] in SYSCOHADA_CLASSES
 
 
 def resolve_account_mapping(code: str) -> Optional[SyscohadaMappingEntry]:
-    normalized = str(code).strip() if code is not None else ""
+    normalized = str(code).strip() if code is not None else "" # type: ignore
     if not is_valid_syscohada(normalized):
         return None
 

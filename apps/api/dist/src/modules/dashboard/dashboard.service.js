@@ -11,14 +11,20 @@ var __metadata = (this && this.__metadata) || function (k, v) {
 var DashboardService_1;
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.DashboardService = exports.SnapshotsRepository = exports.AlertsRepository = exports.KpisRepository = void 0;
+const axios_1 = require("@nestjs/axios");
 const common_1 = require("@nestjs/common");
+const config_1 = require("@nestjs/config");
 const client_1 = require("@prisma/client");
+const rxjs_1 = require("rxjs");
 const business_constants_1 = require("../../common/constants/business.constants");
+const syscohada_mapping_service_1 = require("../../common/services/syscohada-mapping.service");
 const prisma_service_1 = require("../../prisma/prisma.service");
 const redis_service_1 = require("../../redis/redis.service");
 let KpisRepository = class KpisRepository {
-    constructor(prisma) {
+    constructor(prisma, httpService, config) {
         this.prisma = prisma;
+        this.httpService = httpService;
+        this.config = config;
     }
     async findValuesByPeriod(orgId, periodId) {
         const values = await this.prisma.kpiValue.findMany({
@@ -124,16 +130,133 @@ let KpisRepository = class KpisRepository {
                     .toString();
             }
         }
+        try {
+            const calcLines = await this.getCalcIncomeStatementLinesForPeriods(orgId, periodIds);
+            if (calcLines) {
+                const zero = new client_1.Prisma.Decimal('0');
+                const hundred = new client_1.Prisma.Decimal('100');
+                const toDecimal = (value) => {
+                    if (!value)
+                        return zero;
+                    try {
+                        return new client_1.Prisma.Decimal(value);
+                    }
+                    catch {
+                        return zero;
+                    }
+                };
+                const caCalc = toDecimal(calcLines.XB);
+                const ebitdaCalc = toDecimal(calcLines.XD);
+                const operatingCalc = toDecimal(calcLines.XE);
+                const netCalc = toDecimal(calcLines.XI);
+                const achatsCalc = toDecimal(calcLines.RA);
+                const chargesCalc = caCalc.minus(ebitdaCalc);
+                const ebitdaMarginCalc = caCalc.gt(zero) ? ebitdaCalc.div(caCalc).mul(hundred) : zero;
+                const netMarginCalc = caCalc.gt(zero) ? netCalc.div(caCalc).mul(hundred) : zero;
+                const operatingMarginCalc = caCalc.gt(zero) ? operatingCalc.div(caCalc).mul(hundred) : zero;
+                const grossMarginCalc = caCalc.gt(zero) ? caCalc.minus(achatsCalc).div(caCalc).mul(hundred) : zero;
+                const applyOverride = (code, value) => {
+                    const entry = result.find((r) => r.kpi_code === code);
+                    if (!entry)
+                        return;
+                    entry.value = value.toDecimalPlaces(2, client_1.Prisma.Decimal.ROUND_HALF_UP).toString();
+                    const kpiVals = byCode.get(code);
+                    if (kpiVals?.length) {
+                        entry.severity = this.computeKpiSeverity(kpiVals[0].kpi, value);
+                    }
+                };
+                applyOverride('CA', caCalc);
+                applyOverride('EBITDA', ebitdaCalc);
+                applyOverride('CHARGES', chargesCalc);
+                applyOverride('MARGE', ebitdaMarginCalc);
+                applyOverride('MARGE_EBITDA', ebitdaMarginCalc);
+                applyOverride('EBITDA_MARGIN', ebitdaMarginCalc);
+                applyOverride('NET_MARGIN', netMarginCalc);
+                applyOverride('OPERATING_MARGIN', operatingMarginCalc);
+                applyOverride('GROSS_MARGIN', grossMarginCalc);
+            }
+        }
+        catch {
+        }
         return result.sort((a, b) => {
             const rank = { CRITICAL: 3, WARN: 2, INFO: 1 };
             return (rank[b.severity] ?? 0) - (rank[a.severity] ?? 0);
         });
     }
+    computeKpiSeverity(kpi, value) {
+        if (kpi.threshold_critical && value.lte(kpi.threshold_critical)) {
+            return client_1.AlertSeverity.CRITICAL;
+        }
+        if (kpi.threshold_warn && value.lte(kpi.threshold_warn)) {
+            return client_1.AlertSeverity.WARN;
+        }
+        return client_1.AlertSeverity.INFO;
+    }
+    async getCalcIncomeStatementLinesForPeriods(orgId, periodIds) {
+        if (periodIds.length === 0)
+            return null;
+        const [transactions, cashFlowPlans] = await Promise.all([
+            this.prisma.transaction.findMany({
+                where: {
+                    org_id: orgId,
+                    period_id: { in: periodIds },
+                    is_validated: true,
+                },
+                select: {
+                    account_code: true,
+                    account_label: true,
+                    department: true,
+                    amount: true,
+                    is_validated: true,
+                    period: { select: { start_date: true } },
+                },
+            }),
+            this.prisma.cashFlowPlan.findMany({
+                where: { org_id: orgId, period_id: { in: periodIds } },
+                select: {
+                    direction: true,
+                    amount: true,
+                    flow_type: true,
+                    label: true,
+                    planned_date: true,
+                },
+            }),
+        ]);
+        if (transactions.length === 0)
+            return null;
+        const calcUrl = this.config.get('CALC_ENGINE_URL') ?? this.config.get('calcEngine.url');
+        if (!calcUrl) {
+            throw new common_1.InternalServerErrorException('CALC_ENGINE_URL is not configured');
+        }
+        const response = await (0, rxjs_1.firstValueFrom)(this.httpService.post(`${calcUrl}/reports/financial-statements`, {
+            transactions: transactions.map((tx) => ({
+                account_code: tx.account_code,
+                account_label: tx.account_label,
+                department: tx.department,
+                line_type: tx.amount.gt(0) ? 'REVENUE' : 'EXPENSE',
+                amount: tx.amount.toString(),
+                transaction_date: tx.period.start_date.toISOString(),
+                is_validated: tx.is_validated,
+                label: tx.account_label,
+            })),
+            cash_flow_plans: cashFlowPlans.map((plan) => ({
+                direction: plan.direction,
+                amount: plan.amount.toString(),
+                flow_type: plan.flow_type,
+                label: plan.label,
+                planned_date: (plan.planned_date ?? new Date()).toISOString(),
+            })),
+            snapshot: {},
+        }));
+        return response.data?.is_data?.lines ?? null;
+    }
 };
 exports.KpisRepository = KpisRepository;
 exports.KpisRepository = KpisRepository = __decorate([
     (0, common_1.Injectable)(),
-    __metadata("design:paramtypes", [prisma_service_1.PrismaService])
+    __metadata("design:paramtypes", [prisma_service_1.PrismaService,
+        axios_1.HttpService,
+        config_1.ConfigService])
 ], KpisRepository);
 let AlertsRepository = class AlertsRepository {
     constructor(prisma) {
@@ -225,6 +348,34 @@ let SnapshotsRepository = class SnapshotsRepository {
     constructor(prisma) {
         this.prisma = prisma;
     }
+    buildActualKey(periodId, accountCode, department) {
+        return `${periodId}::${accountCode}::${department}`;
+    }
+    async getActualsByKey(orgId, periodIds) {
+        if (periodIds.length === 0) {
+            return new Map();
+        }
+        const transactions = await this.prisma.transaction.findMany({
+            where: {
+                org_id: orgId,
+                period_id: { in: periodIds },
+                is_validated: true,
+            },
+            select: {
+                period_id: true,
+                account_code: true,
+                department: true,
+                amount: true,
+            },
+        });
+        const actualByKey = new Map();
+        for (const transaction of transactions) {
+            const key = this.buildActualKey(transaction.period_id, transaction.account_code, transaction.department);
+            const existing = actualByKey.get(key) ?? new client_1.Prisma.Decimal('0');
+            actualByKey.set(key, existing.plus(transaction.amount.abs()));
+        }
+        return actualByKey;
+    }
     async findSummary(orgId, periodId) {
         const snapshot = await this.prisma.financialSnapshot.findFirst({
             where: {
@@ -250,18 +401,21 @@ let SnapshotsRepository = class SnapshotsRepository {
         };
     }
     async findVariancePct(orgId, periodId) {
-        const aggregate = await this.prisma.budgetLine.aggregate({
+        const lines = await this.prisma.budgetLine.findMany({
             where: {
                 org_id: orgId,
                 period_id: periodId,
             },
-            _sum: {
+            select: {
+                period_id: true,
+                account_code: true,
+                department: true,
                 amount_budget: true,
-                amount_actual: true,
             },
         });
-        const budget = aggregate._sum.amount_budget ?? new client_1.Prisma.Decimal('0');
-        const actual = aggregate._sum.amount_actual ?? new client_1.Prisma.Decimal('0');
+        const actualByKey = await this.getActualsByKey(orgId, [periodId]);
+        const budget = lines.reduce((sum, line) => sum.plus(line.amount_budget), new client_1.Prisma.Decimal('0'));
+        const actual = lines.reduce((sum, line) => sum.plus(actualByKey.get(this.buildActualKey(line.period_id, line.account_code, line.department)) ?? new client_1.Prisma.Decimal('0')), new client_1.Prisma.Decimal('0'));
         if (budget.eq(new client_1.Prisma.Decimal('0'))) {
             return '0.00';
         }
@@ -285,6 +439,7 @@ let SnapshotsRepository = class SnapshotsRepository {
         if (!referenceBudget || referenceBudget.budget_lines.length === 0) {
             return [];
         }
+        const actualByKey = await this.getActualsByKey(orgId, [periodId]);
         const groups = new Map();
         for (const line of referenceBudget.budget_lines) {
             const key = line.account_label;
@@ -294,7 +449,7 @@ let SnapshotsRepository = class SnapshotsRepository {
             };
             groups.set(key, {
                 budgeted: existing.budgeted.plus(line.amount_budget),
-                actual: existing.actual.plus(line.amount_actual),
+                actual: existing.actual.plus(actualByKey.get(this.buildActualKey(line.period_id, line.account_code, line.department)) ?? new client_1.Prisma.Decimal('0')),
             });
         }
         return Array.from(groups.entries()).map(([line_label, { budgeted, actual }]) => {
@@ -368,13 +523,14 @@ let SnapshotsRepository = class SnapshotsRepository {
         });
         if (!referenceBudget || referenceBudget.budget_lines.length === 0)
             return [];
+        const actualByKey = await this.getActualsByKey(orgId, periodIds);
         const groups = new Map();
         for (const line of referenceBudget.budget_lines) {
             const key = line.account_label;
             const existing = groups.get(key) ?? { budgeted: new client_1.Prisma.Decimal(0), actual: new client_1.Prisma.Decimal(0) };
             groups.set(key, {
                 budgeted: existing.budgeted.plus(line.amount_budget),
-                actual: existing.actual.plus(line.amount_actual),
+                actual: existing.actual.plus(actualByKey.get(this.buildActualKey(line.period_id, line.account_code, line.department)) ?? new client_1.Prisma.Decimal('0')),
             });
         }
         return Array.from(groups.entries()).map(([line_label, { budgeted, actual }]) => {
@@ -391,13 +547,84 @@ exports.SnapshotsRepository = SnapshotsRepository = __decorate([
     __metadata("design:paramtypes", [prisma_service_1.PrismaService])
 ], SnapshotsRepository);
 let DashboardService = DashboardService_1 = class DashboardService {
-    constructor(prisma, redisService, kpisRepository, alertsRepository, snapshotsRepository) {
+    buildSummaryFromKpis(summary, kpis) {
+        const kpiByCode = new Map(kpis.map((kpi) => [kpi.kpi_code, new client_1.Prisma.Decimal(kpi.value || '0')]));
+        const revenue = summary.revenue.eq(0) ? (kpiByCode.get('CA') ?? summary.revenue) : summary.revenue;
+        const expenses = summary.expenses.eq(0) ? (kpiByCode.get('CHARGES') ?? summary.expenses) : summary.expenses;
+        const ebitda = summary.ebitda.eq(0) ? (kpiByCode.get('EBITDA') ?? summary.ebitda) : summary.ebitda;
+        const netFallback = revenue.minus(expenses);
+        const net = summary.net.eq(0) ? netFallback : summary.net;
+        const ebitdaMargin = revenue.eq(0)
+            ? new client_1.Prisma.Decimal(0)
+            : ebitda.div(revenue).mul(100);
+        return {
+            revenue: revenue.toString(),
+            expenses: expenses.toString(),
+            ebitda: ebitda.toString(),
+            net: net.toString(),
+            ebitda_margin: ebitdaMargin.toDecimalPlaces(2, client_1.Prisma.Decimal.ROUND_HALF_UP).toString(),
+        };
+    }
+    constructor(prisma, redisService, kpisRepository, alertsRepository, snapshotsRepository, httpService, config, syscohadaMappingService) {
         this.prisma = prisma;
         this.redisService = redisService;
         this.kpisRepository = kpisRepository;
         this.alertsRepository = alertsRepository;
         this.snapshotsRepository = snapshotsRepository;
+        this.httpService = httpService;
+        this.config = config;
+        this.syscohadaMappingService = syscohadaMappingService;
         this.logger = new common_1.Logger(DashboardService_1.name);
+        this.dashboardCacheVersion = 'v2';
+    }
+    async getFinancialStatements(orgId, params) {
+        let periodIds;
+        if (params.period_id) {
+            periodIds = [params.period_id];
+        }
+        else if (params.ytd || params.quarter || (params.from_period && params.to_period)) {
+            const { periodIds: resolved } = await this.resolveAggregatePeriodIds(orgId, {
+                ytd: params.ytd,
+                quarter: params.quarter,
+                fromPeriod: params.from_period,
+                toPeriod: params.to_period,
+            });
+            periodIds = resolved;
+        }
+        else {
+            periodIds = [];
+        }
+        const data = await this.getReportData({ period_id: periodIds[0] }, orgId);
+        if (periodIds.length > 1) {
+            const transactions = await this.prisma.transaction.findMany({
+                where: { org_id: orgId, period_id: { in: periodIds }, is_validated: true },
+                select: {
+                    account_code: true,
+                    account_label: true,
+                    department: true,
+                    amount: true,
+                    is_validated: true,
+                    period: { select: { start_date: true } },
+                },
+                orderBy: { account_code: 'asc' },
+            });
+            data.transactions = transactions.map((tx) => ({
+                account_code: tx.account_code,
+                account_label: tx.account_label,
+                department: tx.department,
+                line_type: tx.amount.gt(0) ? 'REVENUE' : 'EXPENSE',
+                amount: tx.amount.toString(),
+                transaction_date: tx.period.start_date.toISOString(),
+                is_validated: tx.is_validated,
+                label: tx.account_label,
+            }));
+        }
+        const calcUrl = this.config.get('CALC_ENGINE_URL') ?? this.config.get('calcEngine.url');
+        if (!calcUrl) {
+            throw new common_1.InternalServerErrorException('CALC_ENGINE_URL is not configured');
+        }
+        const response = await (0, rxjs_1.firstValueFrom)(this.httpService.post(`${calcUrl}/reports/financial-statements`, data));
+        return response.data;
     }
     async getDashboard(currentUser, periodId, ytd, quarter, fromPeriod, toPeriod) {
         const startedAt = Date.now();
@@ -420,9 +647,7 @@ let DashboardService = DashboardService_1 = class DashboardService {
             this.snapshotsRepository.findRunwayWeeks(currentUser.org_id),
             this.kpisRepository.findRevenueTrend3(currentUser.org_id, period.fiscal_year_id),
         ]);
-        const ebitdaMargin = summary.revenue.eq(new client_1.Prisma.Decimal('0'))
-            ? new client_1.Prisma.Decimal('0')
-            : summary.ebitda.div(summary.revenue).mul(new client_1.Prisma.Decimal('100'));
+        const effectiveSummary = this.buildSummaryFromKpis(summary, kpis);
         const payload = {
             period: {
                 id: period.id,
@@ -432,13 +657,7 @@ let DashboardService = DashboardService_1 = class DashboardService {
             kpis,
             alerts_unread: alertsUnread,
             alerts,
-            is_summary: {
-                revenue: summary.revenue.toString(),
-                expenses: summary.expenses.toString(),
-                ebitda: summary.ebitda.toString(),
-                net: summary.net.toString(),
-                ebitda_margin: ebitdaMargin.toDecimalPlaces(2, client_1.Prisma.Decimal.ROUND_HALF_UP).toString(),
-            },
+            is_summary: effectiveSummary,
             variance_pct: variancePct,
             runway_weeks: runwayWeeks,
             ca_trend: caTrend,
@@ -452,7 +671,7 @@ let DashboardService = DashboardService_1 = class DashboardService {
         if (selection.periodIds.length === 0) {
             throw new common_1.NotFoundException('Aucune période agrégée trouvée');
         }
-        const cacheKey = `dashboard:${currentUser.org_id}:AGG:${selection.cacheSuffix}`;
+        const cacheKey = `dashboard:${this.dashboardCacheVersion}:${currentUser.org_id}:AGG:${selection.cacheSuffix}`;
         const cached = await this.redisService.get(cacheKey);
         if (cached) {
             this.logger.log(`Dashboard aggregate cache HIT - org: ${currentUser.org_id} (${Date.now() - startedAt}ms)`);
@@ -475,21 +694,13 @@ let DashboardService = DashboardService_1 = class DashboardService {
             this.snapshotsRepository.findRunwayWeeks(currentUser.org_id),
             this.kpisRepository.findRevenueTrend3(currentUser.org_id, latestPeriod.fiscal_year_id),
         ]);
-        const ebitdaMargin = summary.revenue.eq(new client_1.Prisma.Decimal('0'))
-            ? new client_1.Prisma.Decimal('0')
-            : summary.ebitda.div(summary.revenue).mul(new client_1.Prisma.Decimal('100'));
+        const effectiveSummary = this.buildSummaryFromKpis(summary, kpis);
         const payload = {
             period: { id: selection.cacheSuffix, label: selection.label, status: client_1.PeriodStatus.OPEN },
             kpis,
             alerts_unread: alertsUnread,
             alerts,
-            is_summary: {
-                revenue: summary.revenue.toString(),
-                expenses: summary.expenses.toString(),
-                ebitda: summary.ebitda.toString(),
-                net: summary.net.toString(),
-                ebitda_margin: ebitdaMargin.toDecimalPlaces(2, client_1.Prisma.Decimal.ROUND_HALF_UP).toString(),
-            },
+            is_summary: effectiveSummary,
             variance_pct: variancePct,
             runway_weeks: runwayWeeks,
             ca_trend: caTrend,
@@ -584,7 +795,7 @@ let DashboardService = DashboardService_1 = class DashboardService {
     async invalidatePeriodCache(orgId, periodId) {
         await Promise.all([
             this.redisService.del(this.buildCacheKey(orgId, periodId)),
-            this.redisService.delByPattern(`dashboard:${orgId}:AGG:*`),
+            this.redisService.delByPattern(`dashboard:${this.dashboardCacheVersion}:${orgId}:AGG:*`),
         ]);
     }
     async getMonthlyData(orgId) {
@@ -609,11 +820,11 @@ let DashboardService = DashboardService_1 = class DashboardService {
         const periodIds = periods.map((period) => period.id);
         const [transactions, expenseTransactions, budgetLines] = await Promise.all([
             this.prisma.transaction.findMany({
-                where: { org_id: orgId, period_id: { in: periodIds } },
+                where: { org_id: orgId, period_id: { in: periodIds }, is_validated: true },
                 select: { period_id: true, amount: true, department: true },
             }),
             this.prisma.transaction.findMany({
-                where: { org_id: orgId, period_id: { in: periodIds }, amount: { lt: 0 } },
+                where: { org_id: orgId, period_id: { in: periodIds }, is_validated: true, amount: { lt: 0 } },
                 select: { amount: true, department: true },
             }),
             this.prisma.budgetLine.findMany({
@@ -701,7 +912,105 @@ let DashboardService = DashboardService_1 = class DashboardService {
         return period;
     }
     buildCacheKey(orgId, periodId) {
-        return `dashboard:${orgId}:${periodId}`;
+        return `dashboard:${this.dashboardCacheVersion}:${orgId}:${periodId}`;
+    }
+    async getReportData(params, orgId) {
+        const periodIds = params.period_id
+            ? [params.period_id]
+            : (await this.prisma.period.findMany({
+                where: { org_id: orgId, status: client_1.PeriodStatus.OPEN },
+                select: { id: true },
+                orderBy: { period_number: 'desc' },
+                take: 1,
+            })).map((period) => period.id);
+        const [transactions, cashFlowPlans] = await Promise.all([
+            this.prisma.transaction.findMany({
+                where: {
+                    org_id: orgId,
+                    period_id: { in: periodIds },
+                    is_validated: true,
+                },
+                select: {
+                    account_code: true,
+                    account_label: true,
+                    department: true,
+                    amount: true,
+                    is_validated: true,
+                    period: { select: { start_date: true } },
+                },
+                orderBy: { account_code: 'asc' },
+            }),
+            this.prisma.cashFlowPlan.findMany({
+                where: { org_id: orgId },
+                select: {
+                    direction: true,
+                    amount: true,
+                    flow_type: true,
+                    planned_date: true,
+                    label: true,
+                },
+                orderBy: { planned_date: 'asc' },
+            }),
+        ]);
+        const latestSelectedPeriod = periodIds.length
+            ? await this.prisma.period.findFirst({
+                where: { org_id: orgId, id: { in: periodIds } },
+                orderBy: [
+                    { fiscal_year: { start_date: 'desc' } },
+                    { period_number: 'desc' },
+                ],
+                select: { id: true },
+            })
+            : null;
+        const latestSnapshot = latestSelectedPeriod
+            ? await this.prisma.financialSnapshot.findFirst({
+                where: {
+                    org_id: orgId,
+                    period_id: latestSelectedPeriod.id,
+                    scenario_id: null,
+                },
+                orderBy: { calculated_at: 'desc' },
+                select: {
+                    is_revenue: true,
+                    is_expenses: true,
+                    is_net: true,
+                    bs_assets: true,
+                    bs_liabilities: true,
+                    bs_equity: true,
+                },
+            })
+            : null;
+        const resolvedLineTypes = await this.syscohadaMappingService.resolveReportLineTypes(orgId, transactions.map((transaction) => ({
+            accountCode: transaction.account_code,
+            amount: transaction.amount.toString(),
+        })));
+        return {
+            transactions: transactions.map((transaction, index) => ({
+                account_code: transaction.account_code,
+                account_label: transaction.account_label,
+                department: transaction.department,
+                line_type: resolvedLineTypes[index],
+                amount: transaction.amount.toString(),
+                transaction_date: (transaction.period?.start_date ?? new Date()).toISOString(),
+                is_validated: transaction.is_validated,
+                label: transaction.account_label,
+            })),
+            cash_flow_plans: cashFlowPlans.map((plan) => ({
+                direction: plan.direction,
+                amount: plan.amount.toString(),
+                flow_type: plan.flow_type,
+                label: plan.label,
+                planned_date: (plan.planned_date ?? new Date()).toISOString(),
+            })),
+            snapshot: {
+                is_revenue: latestSnapshot?.is_revenue.toString() ?? '0',
+                is_expenses: latestSnapshot?.is_expenses.toString() ?? '0',
+                is_net: latestSnapshot?.is_net.toString() ?? '0',
+                bs_assets: latestSnapshot?.bs_assets.toString() ?? '0',
+                bs_liabilities: latestSnapshot?.bs_liabilities.toString() ?? '0',
+                bs_equity: latestSnapshot?.bs_equity.toString() ?? '0',
+            },
+        };
     }
 };
 exports.DashboardService = DashboardService;
@@ -711,6 +1020,9 @@ exports.DashboardService = DashboardService = DashboardService_1 = __decorate([
         redis_service_1.RedisService,
         KpisRepository,
         AlertsRepository,
-        SnapshotsRepository])
+        SnapshotsRepository,
+        axios_1.HttpService,
+        config_1.ConfigService,
+        syscohada_mapping_service_1.SyscohadaMappingService])
 ], DashboardService);
 //# sourceMappingURL=dashboard.service.js.map

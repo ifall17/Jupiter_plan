@@ -23,6 +23,8 @@ type Transaction = {
 type Period = {
   id: string;
   label: string;
+  start_date: string;
+  end_date: string;
 };
 
 type PaginatedTransactions = {
@@ -56,7 +58,6 @@ type ImportUploadPayload = {
 };
 
 const importExcelSchema = z.object({
-  period_id: z.string().min(1, 'Sélectionnez une période'),
   file: z.instanceof(File, { message: 'Sélectionnez un fichier' }),
 });
 
@@ -72,7 +73,6 @@ const addTransactionSchema = z.object({
     .string()
     .min(1, 'Le montant doit être un nombre positif')
     .refine((value) => Number.isFinite(Number(value)) && Number(value) > 0, 'Le montant doit être un nombre positif'),
-  period_id: z.string().min(1, 'Tous les champs obligatoires doivent être remplis'),
   notes: z.string().optional(),
 });
 
@@ -204,7 +204,7 @@ function AddTransactionModal({
     register,
     handleSubmit,
     formState: { errors },
-    setValue,
+    watch,
   } = useForm<AddTransactionFormValues>({
     resolver: zodResolver(addTransactionSchema),
     defaultValues: editingTransaction
@@ -215,7 +215,6 @@ function AddTransactionModal({
           department: editingTransaction.department,
           line_type: editingTransaction.line_type,
           amount: editingTransaction.amount,
-          period_id: editingTransaction.period_id,
           notes: '',
         }
       : {
@@ -225,23 +224,39 @@ function AddTransactionModal({
           department: departments[0],
           line_type: 'REVENUE',
           amount: '',
-          period_id: periods[0]?.id ?? '',
           notes: '',
         },
   });
 
+  const watchedTransactionDate = watch('transaction_date');
+  const resolvedPeriod = useMemo(() => {
+    if (!watchedTransactionDate) return null;
+    return (
+      periods.find((period) => {
+        const startDate = period.start_date?.slice(0, 10);
+        const endDate = period.end_date?.slice(0, 10);
+        return Boolean(startDate && endDate && watchedTransactionDate >= startDate && watchedTransactionDate <= endDate);
+      }) ?? null
+    );
+  }, [periods, watchedTransactionDate]);
+
   const createMutation = useMutation({
-    mutationFn: (values: AddTransactionFormValues) =>
-      apiClient.post('/transactions', {
+    mutationFn: (values: AddTransactionFormValues) => {
+      if (!resolvedPeriod) {
+        throw new Error('Aucune période ne correspond à cette date');
+      }
+
+      return apiClient.post('/transactions', {
         transaction_date: values.transaction_date,
         account_code: values.account_code.trim(),
         label: values.label.trim(),
         department: values.department,
         line_type: values.line_type,
         amount: Number(values.amount).toFixed(2),
-        period_id: values.period_id,
+        period_id: resolvedPeriod.id,
         notes: values.notes?.trim() || undefined,
-      }),
+      });
+    },
     onSuccess: () => onSuccess(),
     onError: (err: any) => {
       setError(err.response?.data?.message ?? 'Erreur lors de la création');
@@ -249,17 +264,22 @@ function AddTransactionModal({
   });
 
   const updateMutation = useMutation({
-    mutationFn: (values: AddTransactionFormValues) =>
-      apiClient.put(`/transactions/${editingTransaction!.id}`, {
+    mutationFn: (values: AddTransactionFormValues) => {
+      if (!resolvedPeriod) {
+        throw new Error('Aucune période ne correspond à cette date');
+      }
+
+      return apiClient.put(`/transactions/${editingTransaction!.id}`, {
         transaction_date: values.transaction_date,
         account_code: values.account_code.trim(),
         label: values.label.trim(),
         department: values.department,
         line_type: values.line_type,
         amount: Number(values.amount).toFixed(2),
-        period_id: values.period_id,
+        period_id: resolvedPeriod.id,
         notes: values.notes?.trim() || undefined,
-      }),
+      });
+    },
     onSuccess: () => onSuccess(),
     onError: (err: any) => {
       setError(err.response?.data?.message ?? 'Erreur lors de la modification');
@@ -279,6 +299,16 @@ function AddTransactionModal({
             {...register('transaction_date')}
             className="tx-form-control"
           />
+          {errors.transaction_date ? <p style={{ marginTop: 6, marginBottom: 0, color: 'var(--terra)', fontSize: 12 }}>{errors.transaction_date.message}</p> : null}
+          {resolvedPeriod ? (
+            <p style={{ marginTop: 6, marginBottom: 0, color: 'var(--kola)', fontSize: 12, fontWeight: 600 }}>
+              Période détectée: {resolvedPeriod.label}
+            </p>
+          ) : watchedTransactionDate ? (
+            <p style={{ marginTop: 6, marginBottom: 0, color: 'var(--terra)', fontSize: 12 }}>
+              Aucune période ne correspond à cette date.
+            </p>
+          ) : null}
         </div>
         <div>
           <FieldLabel>Code comptable SYSCOHADA *</FieldLabel>
@@ -335,21 +365,7 @@ function AddTransactionModal({
             />
             {errors.amount ? <p style={{ marginTop: 6, marginBottom: 0, color: 'var(--terra)', fontSize: 12 }}>{errors.amount.message}</p> : null}
           </div>
-          <div>
-            <FieldLabel>Période *</FieldLabel>
-            <select
-              {...register('period_id')}
-              style={{ width: '100%', border: '1px solid var(--border)', borderRadius: 8, padding: '10px 14px', fontSize: 13 }}
-            >
-              <option value="">Sélectionner une période</option>
-              {periods.map((period) => (
-                <option key={period.id} value={period.id}>
-                  {period.label}
-                </option>
-              ))}
-            </select>
-            {errors.period_id ? <p style={{ marginTop: 6, marginBottom: 0, color: 'var(--terra)', fontSize: 12 }}>{errors.period_id.message}</p> : null}
-          </div>
+          <div />
         </div>
         <div>
           <FieldLabel>Notes</FieldLabel>
@@ -417,18 +433,14 @@ function ImportExcelModal({
     formState: { errors },
   } = useForm<ImportExcelFormValues>({
     resolver: zodResolver(importExcelSchema),
-    defaultValues: {
-      period_id: periods[0]?.id ?? '',
-    },
+    defaultValues: {},
   });
   const selectedFile = watch('file');
-  const periodId = watch('period_id');
 
   const importMutation = useMutation({
     mutationFn: async (values: ImportExcelFormValues) => {
       const formData = new FormData();
       formData.append('file', values.file);
-      formData.append('period_id', values.period_id);
 
       return apiClient
         .post<{
@@ -521,20 +533,9 @@ function ImportExcelModal({
         </div>
 
         <div>
-          <FieldLabel>Période *</FieldLabel>
-          <select
-            {...register('period_id')}
-            style={{ width: '100%', border: '1px solid var(--border)', borderRadius: 8, padding: '10px 14px', fontSize: 13 }}
-          >
-            <option value="">Sélectionner une période</option>
-            {periods.map((period) => (
-              <option key={period.id} value={period.id}>
-                {period.label}
-              </option>
-            ))}
-          </select>
-          {errors.period_id ? <p style={{ marginTop: 6, color: 'var(--terra)', fontSize: 12 }}>{errors.period_id.message}</p> : null}
-          {errors.file ? <p style={{ marginTop: 6, color: 'var(--terra)', fontSize: 12 }}>{errors.file.message}</p> : null}
+          <p style={{ marginTop: 6, color: 'var(--text-md)', fontSize: 11 }}>
+            La période de chaque transaction est détectée automatiquement à partir de la date présente dans le fichier.
+          </p>
         </div>
 
         {previewRows.length > 0 ? (
@@ -608,7 +609,7 @@ function ImportExcelModal({
             setError('');
             importMutation.mutate(values);
           })}
-          disabled={!selectedFile || !periodId || importMutation.isPending}
+          disabled={!selectedFile || importMutation.isPending}
           style={{
             padding: '8px 18px',
             borderRadius: 8,

@@ -9,6 +9,7 @@ type Scenario = {
   name: string;
   type: string;
   status: string;
+  calculation_mode?: 'GLOBAL' | 'COMPTES_CIBLES' | null;
   budget_id: string;
   hypotheses: Array<{ id: string; label: string; parameter: string; value: string; unit: string }> | null;
   snapshot: {
@@ -45,6 +46,14 @@ function ScenarioTypeLabel({ value }: { value: string }) {
   return <>{label}</>;
 }
 
+function ScenarioModeLabel({ value }: { value: 'GLOBAL' | 'COMPTES_CIBLES' }) {
+  return <>{value === 'COMPTES_CIBLES' ? 'Comptes cibles' : 'Global'}</>;
+}
+
+function getScenarioMode(value?: 'GLOBAL' | 'COMPTES_CIBLES' | null): 'GLOBAL' | 'COMPTES_CIBLES' {
+  return value === 'COMPTES_CIBLES' ? 'COMPTES_CIBLES' : 'GLOBAL';
+}
+
 export default function ScenariosPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -63,10 +72,10 @@ export default function ScenariosPage() {
   });
 
   const budgetsQuery = useQuery({
-    queryKey: ['budgets-approved'],
+    queryKey: ['budgets-locked'],
     queryFn: () =>
       apiClient
-        .get<PaginatedBudgets>('/budgets', { params: { status: 'APPROVED', limit: 100 } })
+        .get<PaginatedBudgets>('/budgets', { params: { status: 'LOCKED', limit: 100 } })
         .then(unwrapApiData),
   });
 
@@ -168,6 +177,7 @@ export default function ScenariosPage() {
           <div style={{ display: 'grid', gap: 14 }}>
             {scenarios.map((scenario) => {
               const statusStyle = STATUS_STYLE[scenario.status] ?? { bg: 'var(--surface2)', color: 'var(--text-md)' };
+              const scenarioMode = getScenarioMode(scenario.calculation_mode);
               return (
                 <div
                   key={scenario.id}
@@ -198,7 +208,7 @@ export default function ScenariosPage() {
                       {scenario.name}
                     </p>
                     <p style={{ fontSize: 12, color: 'var(--text-md)' }}>
-                      Type : <ScenarioTypeLabel value={scenario.type} /> · {scenario.hypotheses?.length ?? 0} hypothèse(s)
+                      Type : <ScenarioTypeLabel value={scenario.type} /> · Mode : <ScenarioModeLabel value={scenarioMode} /> · {scenario.hypotheses?.length ?? 0} hypothèse(s)
                     </p>
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>

@@ -191,7 +191,7 @@ export class ImportsService {
 
   async processImport(
     file: Express.Multer.File,
-    periodId: string,
+    periodId: string | undefined,
     orgId: string,
     createdBy: string,
     ipAddress?: string,
@@ -213,15 +213,17 @@ export class ImportsService {
       });
     }
 
-    const period = await this.prisma.period.findFirst({
-      where: { id: periodId, fiscal_year: { org_id: orgId } },
-      select: { id: true },
-    });
-    if (!period) {
-      throw new UnauthorizedException({
-        code: 'IMPORT_PERIOD_UNAUTHORIZED',
-        message: 'The selected period is not accessible for this organization',
+    if (periodId) {
+      const period = await this.prisma.period.findFirst({
+        where: { id: periodId, fiscal_year: { org_id: orgId } },
+        select: { id: true },
       });
+      if (!period) {
+        throw new UnauthorizedException({
+          code: 'IMPORT_PERIOD_UNAUTHORIZED',
+          message: 'The selected period is not accessible for this organization',
+        });
+      }
     }
 
     const safeFileName = buildServerFileName();
@@ -229,7 +231,7 @@ export class ImportsService {
     const job = await this.prisma.importJob.create({
       data: {
         org_id: orgId,
-        period_id: periodId,
+        ...(periodId ? { period_id: periodId } : {}),
         created_by: createdBy,
         source: ImportSource.EXCEL,
         status: ImportStatus.PENDING,
@@ -270,6 +272,11 @@ export class ImportsService {
       if (!rows.length) {
         throw importBadRequest('IMPORT_WORKBOOK_EMPTY', 'Workbook is empty');
       }
+
+      const orgPeriods = await this.prisma.period.findMany({
+        where: { org_id: orgId },
+        select: { id: true, start_date: true, end_date: true },
+      });
 
       const transactions: Prisma.TransactionCreateManyInput[] = [];
       let rowsSkipped = 0;
@@ -334,19 +341,34 @@ export class ImportsService {
           continue;
         }
 
+        const transactionDate = transactionDateRaw instanceof Date ? transactionDateRaw : new Date(String(transactionDateRaw));
+        if (Number.isNaN(transactionDate.getTime())) {
+          rowsSkipped += 1;
+          errors.push({ row: rowNumber, error: 'INVALID_TRANSACTION_DATE', value: String(transactionDateRaw ?? '') });
+          continue;
+        }
+
+        const detectedPeriod = orgPeriods.find(
+          (period) => transactionDate >= period.start_date && transactionDate <= period.end_date,
+        );
+        if (!detectedPeriod) {
+          rowsSkipped += 1;
+          errors.push({ row: rowNumber, error: 'NO_MATCHING_PERIOD_FOR_DATE', value: transactionDate.toISOString().slice(0, 10) });
+          continue;
+        }
+
         const absoluteAmount = parsedAmount.abs();
         const signedAmount = lineType === LineType.EXPENSE ? absoluteAmount.negated() : absoluteAmount;
-        const transactionDate = transactionDateRaw instanceof Date ? transactionDateRaw : new Date(String(transactionDateRaw));
 
         transactions.push({
           org_id: orgId,
-          period_id: periodId,
+          period_id: detectedPeriod.id,
           account_code: accountCode,
           account_label: label,
           department,
           amount: signedAmount.toDecimalPlaces(2),
           import_job_id: job.id,
-          created_at: Number.isNaN(transactionDate.getTime()) ? new Date() : transactionDate,
+          created_at: transactionDate,
         });
       }
 

@@ -10,7 +10,18 @@ describe('TransactionsService', () => {
     transaction: {
       findFirst: jest.Mock;
       update: jest.Mock;
+      updateMany: jest.Mock;
+      findMany: jest.Mock;
     };
+    period: {
+      findMany: jest.Mock;
+    };
+    budgetLine: {
+      updateMany: jest.Mock;
+      findMany: jest.Mock;
+      update: jest.Mock;
+    };
+    $transaction: jest.Mock;
   };
   let syscohadaMappingService: {
     resolveSingleLineType: jest.Mock;
@@ -26,8 +37,20 @@ describe('TransactionsService', () => {
       transaction: {
         findFirst: jest.fn(),
         update: jest.fn(),
+        updateMany: jest.fn(),
+        findMany: jest.fn(),
       },
+      period: {
+        findMany: jest.fn(),
+      },
+      budgetLine: {
+        updateMany: jest.fn(),
+        findMany: jest.fn(),
+        update: jest.fn(),
+      },
+      $transaction: jest.fn(),
     };
+    prisma.$transaction.mockImplementation(async (callback: (trx: typeof prisma) => Promise<unknown>) => callback(prisma));
     syscohadaMappingService = {
       resolveSingleLineType: jest.fn(),
     };
@@ -127,5 +150,46 @@ describe('TransactionsService', () => {
 
     await expect(service.update(currentUser, 'tx-3', { amount: '0' })).rejects.toThrow(BadRequestException);
     expect(syscohadaMappingService.resolveSingleLineType).not.toHaveBeenCalled();
+  });
+
+  it('synchronise les réalisés par compte et département sans exiger le même libellé', async () => {
+    prisma.transaction.updateMany.mockResolvedValue({ count: 1 });
+    prisma.period.findMany.mockResolvedValue([{ id: 'period-1' }]);
+    prisma.transaction.findMany.mockResolvedValue([
+      {
+        account_code: '601000',
+        account_label: 'Achats MP import',
+        department: 'PROD',
+        amount: new Prisma.Decimal('-45000'),
+      },
+    ]);
+    prisma.budgetLine.findMany.mockResolvedValue([{ id: 'line-1' }]);
+    prisma.budgetLine.updateMany.mockResolvedValue({ count: 3 });
+    prisma.budgetLine.update.mockResolvedValue({ id: 'line-1' });
+
+    const result = await service.validateBatch(currentUser, ['tx-1']);
+
+    expect(result).toEqual({ updated: 1 });
+    expect(prisma.budgetLine.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ org_id: 'org-1', period_id: 'period-1' }),
+        data: expect.objectContaining({ amount_actual: new Prisma.Decimal('0') }),
+      }),
+    );
+    expect(prisma.budgetLine.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          org_id: 'org-1',
+          period_id: 'period-1',
+          account_code: '601000',
+          department: 'PROD',
+        }),
+      }),
+    );
+    expect(prisma.budgetLine.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ amount_actual: new Prisma.Decimal('45000') }),
+      }),
+    );
   });
 });

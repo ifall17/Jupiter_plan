@@ -13,8 +13,8 @@ export class HypothesisDto {
   @IsDecimal()
   value!: string;
 
-  @IsIn(['%', 'FCFA', 'multiplier'])
-  unit!: '%' | 'FCFA' | 'multiplier';
+  @IsIn(['%', 'FCFA', 'multiplier', 'jours'])
+  unit!: '%' | 'FCFA' | 'multiplier' | 'jours';
 }
 
 export class AddHypothesisDto {

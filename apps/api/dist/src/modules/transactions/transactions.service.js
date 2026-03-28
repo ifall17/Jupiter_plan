@@ -19,6 +19,9 @@ let TransactionsService = class TransactionsService {
         this.prisma = prisma;
         this.syscohadaMappingService = syscohadaMappingService;
     }
+    buildBudgetActualKey(periodId, accountCode, department) {
+        return `${periodId}::${accountCode}::${department}`;
+    }
     async list(params) {
         const page = params.page && params.page > 0 ? params.page : 1;
         const limit = params.limit && params.limit > 0 ? Math.min(params.limit, 100) : 20;
@@ -246,6 +249,15 @@ let TransactionsService = class TransactionsService {
         if (periods.length === 0)
             return;
         for (const period of periods) {
+            await trx.budgetLine.updateMany({
+                where: {
+                    org_id: orgId,
+                    period_id: period.id,
+                },
+                data: {
+                    amount_actual: new client_1.Prisma.Decimal('0'),
+                },
+            });
             const transactions = await trx.transaction.findMany({
                 where: {
                     org_id: orgId,
@@ -261,18 +273,17 @@ let TransactionsService = class TransactionsService {
             });
             const grouped = new Map();
             for (const tx of transactions) {
-                const key = `${tx.account_code}|${tx.account_label}|${tx.department}`;
+                const key = this.buildBudgetActualKey(period.id, tx.account_code, tx.department);
                 const existing = grouped.get(key) ?? new client_1.Prisma.Decimal('0');
                 grouped.set(key, existing.plus(tx.amount));
             }
             for (const [key, totalAmount] of grouped.entries()) {
-                const [accountCode, accountLabel, department] = key.split('|');
+                const [, accountCode, department] = key.split('::');
                 const budgetLines = await trx.budgetLine.findMany({
                     where: {
                         org_id: orgId,
                         period_id: period.id,
                         account_code: accountCode,
-                        account_label: accountLabel,
                         department: department,
                     },
                     select: { id: true },

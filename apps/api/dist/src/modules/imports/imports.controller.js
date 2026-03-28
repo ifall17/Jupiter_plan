@@ -29,9 +29,6 @@ let ImportsController = class ImportsController {
         this.importsService = importsService;
     }
     async upload(req, file, periodId) {
-        if (!periodId) {
-            throw importBadRequest('IMPORT_PERIOD_REQUIRED', 'period_id is required');
-        }
         const user = this.getCurrentUser(req);
         const job = await this.importsService.processImport(file, periodId, user.org_id, user.sub, this.getClientIp(req));
         return job;
